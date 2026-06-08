@@ -18,7 +18,7 @@
   "bugs": {
     "url": "https://github.com/jflowbflow/jp01/issues"
   },
-  "homepage": "https://github.com/jflowbflow/jp01#readme",
+  "homepage": "https://jflowbflow.github.io/jp01/",
   "dependencies": {
     "three": "^0.184.0"
   },
