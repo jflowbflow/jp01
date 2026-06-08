@@ -15,7 +15,8 @@ git fetch origin gh-pages 2>/dev/null || true
 git worktree add -B gh-pages "$WORKTREE" origin/gh-pages 2>/dev/null \
   || git worktree add -B gh-pages "$WORKTREE"
 
-rsync -av --delete "$ROOT/dist/" "$WORKTREE/"
+find "$WORKTREE" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+cp -R "$ROOT/dist/." "$WORKTREE/"
 touch "$WORKTREE/.nojekyll"
 
 cd "$WORKTREE"
