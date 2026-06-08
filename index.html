@@ -2,28 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Mobile Metro</title>
-    <script type="module" crossorigin src="./assets/index-DCJpPtKL.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-B-fjdtv6.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Line Tracker</title>
+    <script type="module" crossorigin src="/jp01/assets/index-KKWdhMr0.js"></script>
+    <link rel="stylesheet" crossorigin href="/jp01/assets/index-C0QGQmA4.css">
   </head>
   <body>
-    <main id="app">
-      <canvas id="game-canvas" aria-label="Mobile metro game map"></canvas>
-      <section class="hud" aria-live="polite">
-        <div class="status-card">
-          <span id="station-count">0 stations</span>
-          <span id="route-count">0 linked</span>
-          <span id="game-status">running</span>
-        </div>
-        <p id="hint-text">Tap stations to add them to the metro line. New stations spawn automatically.</p>
-      </section>
-      <nav class="toolbar" aria-label="Game toolbar">
-        <button id="pause-toggle" class="tool-button primary" type="button" aria-pressed="false">
-          Pause
-        </button>
-        <button id="clear-line" class="tool-button" type="button">Clear line</button>
-      </nav>
-    </main>
+    <div id="app">
+      <header class="header">
+        <h1>Line Tracker</h1>
+        <p class="subtitle">Three looping metro lines — Mini Metro style</p>
+      </header>
+      <main id="map" class="map" aria-label="Metro map"></main>
+      <footer class="legend" id="legend"></footer>
+    </div>
   </body>
 </html>
