@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig(({ command }) => ({
-  base: command === 'build' ? '/jp01/' : '/',
+  base: command === 'build' ? './' : '/',
 }));
