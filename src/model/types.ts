@@ -29,6 +29,10 @@ export type PlayerLine = LineDefinition & {
   stationIds: string[];
   isLoop: boolean;
   loopHandleStationId?: string;
+  activeStationIds: string[];
+  activeIsLoop: boolean;
+  activeLoopHandleStationId?: string;
+  pendingApplyStationId?: string;
 };
 
 export type RoutedLine = {
@@ -37,3 +41,15 @@ export type RoutedLine = {
   pathD: string;
   totalLength: number;
 };
+
+export type Train = {
+  lineId: string;
+  distance: number;
+  direction: 1 | -1;
+  speed: number;
+  passengers: Passenger[];
+  dwellRemaining: number;
+  lastStationId: string | null;
+};
+
+export const TRAIN_CAPACITY = 6;

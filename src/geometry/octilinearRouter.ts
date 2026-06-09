@@ -113,3 +113,46 @@ export function pointAtPathLength(pathD: string, distance: number): Point {
   const point = path.getPointAtLength(clamped);
   return { x: point.x, y: point.y };
 }
+
+export function pathAngleAtLength(pathD: string, distance: number): number {
+  const length = pathTotalLength(pathD);
+  if (length === 0) return 0;
+
+  const sample = Math.min(4, length * 0.02);
+  const p1 = pointAtPathLength(pathD, distance);
+  const p2 = pointAtPathLength(pathD, distance + sample);
+  return Math.atan2(p2.y - p1.y, p2.x - p1.x);
+}
+
+export type StationPathStop = {
+  stationId: string;
+  distance: number;
+};
+
+export function stationStopsOnPath(
+  pathD: string,
+  stations: { id: string; x: number; y: number }[],
+): StationPathStop[] {
+  if (!pathD || stations.length === 0) return [];
+
+  const total = pathTotalLength(pathD);
+  if (total === 0) return [];
+
+  return stations.map((station) => {
+    let bestDistance = 0;
+    let bestGap = Infinity;
+
+    const samples = Math.max(40, Math.ceil(total / 8));
+    for (let i = 0; i <= samples; i += 1) {
+      const distance = (total * i) / samples;
+      const point = pointAtPathLength(pathD, distance);
+      const gap = Math.hypot(point.x - station.x, point.y - station.y);
+      if (gap < bestGap) {
+        bestGap = gap;
+        bestDistance = distance;
+      }
+    }
+
+    return { stationId: station.id, distance: bestDistance };
+  });
+}

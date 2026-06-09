@@ -25,6 +25,12 @@ export type DragOrigin = {
   insertAfterIndex?: number;
 };
 
+type ActiveRoute = {
+  stationIds: string[];
+  isLoop: boolean;
+  loopHandleStationId?: string;
+};
+
 export class GameState {
   private readonly lines: PlayerLine[];
   private activeLineId: string;
@@ -42,6 +48,8 @@ export class GameState {
       ...definition,
       stationIds: [],
       isLoop: false,
+      activeStationIds: [],
+      activeIsLoop: false,
     }));
     this.activeLineId = this.lines[0].id;
 
@@ -94,6 +102,35 @@ export class GameState {
 
   getActiveLine(): PlayerLine {
     return this.lines.find((line) => line.id === this.activeLineId) ?? this.lines[0];
+  }
+
+  getActiveRoute(line: PlayerLine): ActiveRoute {
+    return {
+      stationIds: line.activeStationIds,
+      isLoop: line.activeIsLoop,
+      loopHandleStationId: line.activeLoopHandleStationId,
+    };
+  }
+
+  hasPendingRoute(line: PlayerLine): boolean {
+    return (
+      line.pendingApplyStationId !== undefined ||
+      line.stationIds.join() !== line.activeStationIds.join() ||
+      line.isLoop !== line.activeIsLoop
+    );
+  }
+
+  getActiveRouteShapes(lineId: string): Set<StationShape> {
+    const line = this.getLine(lineId);
+    if (!line) return new Set();
+
+    const stationMap = new Map(this.stations.map((station) => [station.id, station]));
+    const shapes = new Set<StationShape>();
+    for (const stationId of line.activeStationIds) {
+      const station = stationMap.get(stationId);
+      if (station) shapes.add(station.shape);
+    }
+    return shapes;
   }
 
   isStationOnLine(stationId: string): boolean {
@@ -149,6 +186,7 @@ export class GameState {
 
     this.activeLineId = emptyLine.id;
     emptyLine.stationIds.push(stationId);
+    this.syncActiveRoute(emptyLine);
     return {
       lineId: emptyLine.id,
       fromStationId: stationId,
@@ -223,11 +261,20 @@ export class GameState {
   connectDragTarget(origin: DragOrigin, targetStationId: string): boolean {
     if (!this.canConnectDragTarget(origin, targetStationId)) return false;
 
+    const junctionStationId = origin.fromStationId;
+    let changed = false;
+
     if (origin.mode === "insert" && origin.insertAfterIndex !== undefined) {
-      return this.insertStationAt(origin.lineId, origin.insertAfterIndex, targetStationId);
+      changed = this.insertStationAt(origin.lineId, origin.insertAfterIndex, targetStationId);
+    } else {
+      changed = this.addStation(targetStationId);
     }
 
-    return this.addStation(targetStationId);
+    if (changed) {
+      this.queueRouteChange(origin.lineId, junctionStationId);
+    }
+
+    return changed;
   }
 
   insertStationAt(lineId: string, afterIndex: number, stationId: string): boolean {
@@ -254,15 +301,18 @@ export class GameState {
     const line = this.getLine(origin.lineId);
     if (line && !line.isLoop && line.stationIds.length === 1) {
       line.stationIds.pop();
+      this.syncActiveRoute(line);
     }
   }
 
   unloopLine(lineId: string): boolean {
     const line = this.getLine(lineId);
-    if (!line?.isLoop) return false;
+    if (!line?.isLoop || !line.loopHandleStationId) return false;
 
+    const junction = line.loopHandleStationId;
     line.isLoop = false;
     line.loopHandleStationId = undefined;
+    this.queueRouteChange(lineId, junction);
     return true;
   }
 
@@ -273,6 +323,7 @@ export class GameState {
     const { stationIds } = line;
     if (stationIds.length === 0) {
       stationIds.push(stationId);
+      this.syncActiveRoute(line);
       return true;
     }
 
@@ -293,18 +344,61 @@ export class GameState {
     return true;
   }
 
+  queueRouteChange(lineId: string, junctionStationId: string): void {
+    const line = this.getLine(lineId);
+    if (!line) return;
+
+    if (line.activeStationIds.length < 2) {
+      this.syncActiveRoute(line);
+      return;
+    }
+
+    if (
+      line.stationIds.join() === line.activeStationIds.join() &&
+      line.isLoop === line.activeIsLoop
+    ) {
+      line.pendingApplyStationId = undefined;
+      return;
+    }
+
+    line.pendingApplyStationId = junctionStationId;
+  }
+
+  syncActiveRoute(line: PlayerLine): void {
+    line.activeStationIds = [...line.stationIds];
+    line.activeIsLoop = line.isLoop;
+    line.activeLoopHandleStationId = line.loopHandleStationId;
+    line.pendingApplyStationId = undefined;
+  }
+
+  applyPendingAtStation(lineId: string, stationId: string): boolean {
+    const line = this.getLine(lineId);
+    if (!line || line.pendingApplyStationId !== stationId) return false;
+    this.syncActiveRoute(line);
+    return true;
+  }
+
+  boardPassenger(passengerId: string): boolean {
+    const index = this.passengers.findIndex((passenger) => passenger.id === passengerId);
+    if (index < 0) return false;
+    this.passengers.splice(index, 1);
+    return true;
+  }
+
   undoLastStation(lineId?: string): boolean {
     const line = this.lines.find((entry) => entry.id === (lineId ?? this.activeLineId));
     if (!line || line.isLoop || line.stationIds.length === 0) return false;
     line.stationIds.pop();
+    this.syncActiveRoute(line);
     return true;
   }
 
   getLineStatus(line: PlayerLine): string {
+    if (this.hasPendingRoute(line)) return "Change pending at next stop";
     if (line.isLoop) return "Loop — drag the tail to open";
     if (line.stationIds.length === 0) return "Hold a station to start";
     if (line.stationIds.length === 1) return "1 station";
-    return `${line.stationIds.length} stations — drag to extend or loop`;
+    return `${line.stationIds.length} stations`;
   }
 
   advanceTime(dt: number): void {

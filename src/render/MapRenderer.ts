@@ -1,9 +1,9 @@
 import { GameState, type DragOrigin } from "../game/GameState.ts";
 import { Simulation } from "../game/simulation.ts";
+import { TrainSimulation } from "../game/trainSimulation.ts";
 import { shapeLabel, stationRadius } from "../game/stationSpawner.ts";
 import {
   pathTotalLength,
-  pointAtPathLength,
   routeOctilinear,
   routeOctilinearOpen,
 } from "../geometry/octilinearRouter.ts";
@@ -14,12 +14,13 @@ import {
   createStationShape,
   passengerOffset,
 } from "./stationShapes.ts";
+import { createTrainElement } from "./trainRenderer.ts";
 import { MapViewport } from "./viewport.ts";
 
 const LINE_WIDTH = 7;
 const ROUTE_HIT_WIDTH = 22;
-const TRAIN_RADIUS = 5;
 const PASSENGER_SIZE = 4.5;
+const PENDING_ROUTE_OPACITY = 0.32;
 const BOUNCE_MS = 280;
 const HOLD_MS = 320;
 const HOLD_CANCEL_PX = 12;
@@ -69,6 +70,7 @@ export class MapRenderer {
   private readonly statusEl: HTMLElement;
   private readonly game = new GameState();
   private readonly simulation = new Simulation(this.game);
+  private readonly trainSimulation = new TrainSimulation();
   private readonly viewport = new MapViewport();
   private readonly svg: SVGSVGElement;
   private readonly routesGroup: SVGGElement;
@@ -79,9 +81,8 @@ export class MapRenderer {
   private readonly passengersGroup: SVGGElement;
   private readonly trainsGroup: SVGGElement;
   private readonly pickerGroup: SVGGElement;
-  private routedLines: RoutedLine[] = [];
+  private activeRoutedLines: RoutedLine[] = [];
   private animationFrame = 0;
-  private trainPhase = new Map<string, number>();
   private lastFrameTime = performance.now();
   private drag: DragState | null = null;
   private bounce: BounceState | null = null;
@@ -183,7 +184,7 @@ export class MapRenderer {
   }
 
   private refresh(): void {
-    this.routedLines = this.buildRoutedLines();
+    this.activeRoutedLines = this.buildRoutedLines("active");
     this.drawRoutes();
     this.drawRouteHits();
     this.drawLoopHandles();
@@ -194,17 +195,25 @@ export class MapRenderer {
     this.drawLinePicker();
   }
 
-  private buildRoutedLines(): RoutedLine[] {
+  private buildRoutedLines(kind: "active" | "pending"): RoutedLine[] {
     const stationMap = this.getStationMap();
 
     return this.game.getLines().flatMap((line) => {
-      const lineStations = line.stationIds
+      if (kind === "pending" && !this.game.hasPendingRoute(line)) return [];
+
+      const route =
+        kind === "active" ? this.game.getActiveRoute(line) : {
+          stationIds: line.stationIds,
+          isLoop: line.isLoop,
+        };
+
+      const lineStations = route.stationIds
         .map((id) => stationMap.get(id))
         .filter((station): station is Station => Boolean(station));
 
       if (lineStations.length < 2) return [];
 
-      const pathD = line.isLoop
+      const pathD = route.isLoop
         ? routeOctilinear(lineStations)
         : routeOctilinearOpen(lineStations);
 
@@ -224,7 +233,7 @@ export class MapRenderer {
   private drawRoutes(): void {
     this.routesGroup.replaceChildren();
 
-    for (const routed of this.routedLines) {
+    for (const routed of this.activeRoutedLines) {
       const track = document.createElementNS("http://www.w3.org/2000/svg", "path");
       track.setAttribute("d", routed.pathD);
       track.setAttribute("fill", "none");
@@ -236,6 +245,71 @@ export class MapRenderer {
       track.setAttribute("pointer-events", "none");
       this.routesGroup.append(track);
     }
+
+    for (const line of this.game.getLines()) {
+      if (!this.game.hasPendingRoute(line)) continue;
+
+      for (const pathD of this.buildPendingSegmentPaths(line)) {
+        const track = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        track.setAttribute("d", pathD);
+        track.setAttribute("fill", "none");
+        track.setAttribute("stroke", line.color);
+        track.setAttribute("stroke-width", String(LINE_WIDTH));
+        track.setAttribute("stroke-linecap", "round");
+        track.setAttribute("stroke-linejoin", "round");
+        track.setAttribute("opacity", String(PENDING_ROUTE_OPACITY));
+        track.setAttribute("pointer-events", "none");
+        this.routesGroup.append(track);
+      }
+    }
+  }
+
+  private buildPendingSegmentPaths(line: PlayerLine): string[] {
+    const stationMap = this.getStationMap();
+    const active = line.activeStationIds;
+    const pending = line.stationIds;
+    const pendingStations = pending
+      .map((id) => stationMap.get(id))
+      .filter((station): station is Station => Boolean(station));
+
+    if (pendingStations.length < 2) return [];
+
+    const paths: string[] = [];
+    const pushSegment = (fromIndex: number, toIndex: number) => {
+      const from = pendingStations[fromIndex];
+      const to = pendingStations[toIndex];
+      if (!from || !to) return;
+      const pathD = routeOctilinearOpen([from, to]);
+      if (pathD) paths.push(pathD);
+    };
+
+    const isTailExtension =
+      pending.length > active.length &&
+      active.every((id, index) => pending[index] === id) &&
+      line.isLoop === line.activeIsLoop;
+
+    if (isTailExtension) {
+      for (let index = Math.max(0, active.length - 1); index < pending.length - 1; index += 1) {
+        pushSegment(index, index + 1);
+      }
+      return paths;
+    }
+
+    if (line.isLoop && !line.activeIsLoop && active.every((id, index) => pending[index] === id)) {
+      pushSegment(pending.length - 2, pending.length - 1);
+      pushSegment(pending.length - 1, 0);
+      return paths;
+    }
+
+    if (!line.activeIsLoop && line.isLoop) {
+      const full = routeOctilinear(pendingStations);
+      return full ? [full] : [];
+    }
+
+    const full = line.isLoop
+      ? routeOctilinear(pendingStations)
+      : routeOctilinearOpen(pendingStations);
+    return full ? [full] : [];
   }
 
   private drawRouteHits(): void {
@@ -432,19 +506,8 @@ export class MapRenderer {
   private drawTrains(): void {
     this.trainsGroup.replaceChildren();
 
-    for (const routed of this.routedLines) {
-      const train = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      train.setAttribute("r", String(TRAIN_RADIUS));
-      train.setAttribute("fill", "#ffffff");
-      train.setAttribute("stroke", routed.line.color);
-      train.setAttribute("stroke-width", "3");
-      train.dataset.lineId = routed.line.id;
-      train.setAttribute("pointer-events", "none");
-      this.trainsGroup.append(train);
-
-      if (!this.trainPhase.has(routed.line.id)) {
-        this.trainPhase.set(routed.line.id, Math.random());
-      }
+    for (const state of this.trainSimulation.getRenderStates(this.game)) {
+      this.trainsGroup.append(createTrainElement(state));
     }
   }
 
@@ -593,7 +656,7 @@ export class MapRenderer {
     if (this.linePicker) hint = "Choose a line color to drag from.";
     else if (this.drag?.origin.mode === "insert") hint = "Release on a station to insert.";
     else if (this.drag?.origin.mode === "unloop") hint = "Release to open the loop.";
-    else if (this.drag) hint = "Release on a station to connect.";
+    else if (this.drag) hint = "Drag over a station to connect automatically.";
 
     this.statusEl.textContent =
       `Week ${this.game.getWeek()} · ${this.game.getStations().length} stations · ` +
@@ -607,6 +670,49 @@ export class MapRenderer {
     }
     this.redrawStations();
     this.refresh();
+  }
+
+  private tryAutoAnchor(): void {
+    if (!this.drag?.snapTargetId) return;
+
+    const { origin, snapTargetId, pointerId } = this.drag;
+    if (!this.game.connectDragTarget(origin, snapTargetId)) return;
+
+    const station = this.getStationMap().get(snapTargetId);
+    const line = this.game.getLine(origin.lineId);
+
+    if (!station || !line) {
+      this.drag = null;
+      this.finishInteractionRefresh();
+      return;
+    }
+
+    if (origin.mode === "insert" || line.isLoop) {
+      this.drag = null;
+      this.finishInteractionRefresh();
+      return;
+    }
+
+    const nextOrigin = this.game.beginDragFromStation(snapTargetId, origin.lineId);
+    if (!nextOrigin) {
+      this.drag = null;
+      this.finishInteractionRefresh();
+      return;
+    }
+
+    this.drag = {
+      origin: nextOrigin,
+      pointerId,
+      x: station.x,
+      y: station.y,
+      snapTargetId: null,
+    };
+
+    this.activeRoutedLines = this.buildRoutedLines("active");
+    this.drawRoutes();
+    this.drawPreview();
+    this.redrawStations();
+    this.updateStatus();
   }
 
   private startDrag(origin: DragOrigin, pointerId: number, x: number, y: number): void {
@@ -781,7 +887,10 @@ export class MapRenderer {
 
       this.drag = { ...this.drag, x: point.x, y: point.y, snapTargetId };
       this.drawPreview();
-      if (snapTargetId !== previousSnap) this.redrawStations();
+      if (snapTargetId !== previousSnap) {
+        this.redrawStations();
+        if (snapTargetId) this.tryAutoAnchor();
+      }
       return;
     }
 
@@ -882,6 +991,11 @@ export class MapRenderer {
       return;
     }
 
+    if (snapTargetId) {
+      this.finishInteractionRefresh();
+      return;
+    }
+
     const stationMap = this.getStationMap();
     const fromStation = stationMap.get(origin.fromStationId);
     if (!fromStation) {
@@ -919,16 +1033,15 @@ export class MapRenderer {
   };
 
   private startAnimation(): void {
-    const speeds = [0.045, 0.035, 0.03];
-
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - this.lastFrameTime) / 1000);
       this.lastFrameTime = now;
 
       this.game.advanceTime(dt);
-      const update = this.simulation.update(dt);
+      const worldUpdate = this.simulation.update(dt);
+      let trainPassengersChanged = false;
 
-      if (update.stationsChanged) {
+      if (worldUpdate.stationsChanged) {
         const latest = this.game.getStations().at(-1);
         if (latest) this.simulation.onStationSpawned(latest.id);
 
@@ -938,7 +1051,7 @@ export class MapRenderer {
           this.redrawStations();
           this.refresh();
         }
-      } else if (update.passengersChanged && !this.isInteracting()) {
+      } else if ((worldUpdate.passengersChanged || trainPassengersChanged) && !this.isInteracting()) {
         this.drawPassengers();
         this.updateStatus();
       }
@@ -953,29 +1066,17 @@ export class MapRenderer {
         }
       }
 
-      this.routedLines.forEach((routed, index) => {
-        const train = this.trainsGroup.querySelector<SVGCircleElement>(
-          `circle[data-line-id="${routed.line.id}"]`,
-        );
-        if (!train || routed.totalLength === 0) return;
-
-        const speed = speeds[index % speeds.length];
-        const phase = this.trainPhase.get(routed.line.id) ?? 0;
-        const time = now / 1000;
-
-        let distance: number;
-        if (routed.line.isLoop) {
-          distance = ((time * speed + phase) % 1) * routed.totalLength;
-        } else {
-          distance =
-            ((Math.sin((time + phase * 10) * speed * Math.PI * 2) + 1) / 2) *
-            routed.totalLength;
+      const hasActiveRoutes = this.game.getLines().some(
+        (line) => line.activeStationIds.length >= 2,
+      );
+      if (hasActiveRoutes) {
+        trainPassengersChanged = this.trainSimulation.update(dt, this.game);
+        this.activeRoutedLines = this.buildRoutedLines("active");
+        if (this.game.getLines().some((line) => this.game.hasPendingRoute(line))) {
+          this.drawRoutes();
         }
-
-        const point = pointAtPathLength(routed.pathD, distance);
-        train.setAttribute("cx", String(point.x));
-        train.setAttribute("cy", String(point.y));
-      });
+        this.drawTrains();
+      }
 
       this.animationFrame = requestAnimationFrame(tick);
     };
