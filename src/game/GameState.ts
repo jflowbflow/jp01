@@ -15,6 +15,12 @@ import {
 } from "./stationSpawner.ts";
 import type { Passenger, PlayerLine, Station, StationShape } from "../model/types.ts";
 
+export type DragOrigin = {
+  lineId: string;
+  fromStationId: string;
+  addedOnDragStart: boolean;
+};
+
 export class GameState {
   private readonly lines: PlayerLine[];
   private activeLineId: string;
@@ -80,6 +86,75 @@ export class GameState {
 
   getActiveLine(): PlayerLine {
     return this.lines.find((line) => line.id === this.activeLineId) ?? this.lines[0];
+  }
+
+  isStationOnLine(stationId: string): boolean {
+    return this.lines.some((line) => line.stationIds.includes(stationId));
+  }
+
+  findEmptyLine(): PlayerLine | undefined {
+    return this.lines.find((line) => line.stationIds.length === 0);
+  }
+
+  findExtendableLine(stationId: string): PlayerLine | undefined {
+    return this.lines.find(
+      (line) =>
+        !line.isLoop &&
+        line.stationIds.length > 0 &&
+        line.stationIds[line.stationIds.length - 1] === stationId,
+    );
+  }
+
+  beginDragFrom(stationId: string): DragOrigin | null {
+    const extendable = this.findExtendableLine(stationId);
+    if (extendable) {
+      this.activeLineId = extendable.id;
+      return {
+        lineId: extendable.id,
+        fromStationId: stationId,
+        addedOnDragStart: false,
+      };
+    }
+
+    if (this.isStationOnLine(stationId)) return null;
+
+    const emptyLine = this.findEmptyLine();
+    if (!emptyLine) return null;
+
+    this.activeLineId = emptyLine.id;
+    emptyLine.stationIds.push(stationId);
+    return {
+      lineId: emptyLine.id,
+      fromStationId: stationId,
+      addedOnDragStart: true,
+    };
+  }
+
+  canConnectDragTarget(fromStationId: string, targetStationId: string): boolean {
+    if (fromStationId === targetStationId) return false;
+
+    const line = this.getActiveLine();
+    if (line.isLoop) return false;
+
+    const { stationIds } = line;
+    if (stationIds.length === 0) return true;
+    if (stationIds[stationIds.length - 1] !== fromStationId) return false;
+
+    const firstId = stationIds[0];
+    if (targetStationId === firstId) {
+      return stationIds.length >= 3;
+    }
+
+    return !stationIds.includes(targetStationId);
+  }
+
+  cancelDrag(addedOnDragStart: boolean): void {
+    if (!addedOnDragStart) return;
+
+    const line = this.getActiveLine();
+    if (!line.isLoop && line.stationIds.length === 1) {
+      line.stationIds.pop();
+    }
   }
 
   addStation(stationId: string): boolean {

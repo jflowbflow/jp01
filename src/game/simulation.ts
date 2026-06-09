@@ -13,7 +13,7 @@ export type SimulationUpdate = {
 };
 
 export class Simulation {
-  private stationSpawnTimer = 2.5;
+  private stationSpawnTimer = 12;
   private passengerTimers = new Map<string, number>();
 
   constructor(private readonly game: GameState) {
@@ -61,7 +61,7 @@ export class Simulation {
   }
 
   onStationSpawned(stationId: string): void {
-    this.passengerTimers.set(stationId, 0.8 + Math.random() * 1.5);
+    this.passengerTimers.set(stationId, 5 + Math.random() * 4);
   }
 
   private nextStationSpawnInterval(): number {

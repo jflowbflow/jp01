@@ -8,26 +8,25 @@ function addPoint(points: Point[], point: Point): void {
 }
 
 function routeSegment(start: Point, end: Point): Point[] {
-  const points: Point[] = [{ ...start }];
-  let current = { ...start };
-
-  while (current.x !== end.x || current.y !== end.y) {
-    const dx = end.x - current.x;
-    const dy = end.y - current.y;
-    const stepX = Math.sign(dx);
-    const stepY = Math.sign(dy);
-
-    if (stepX !== 0 && stepY !== 0) {
-      current = { x: current.x + stepX, y: current.y + stepY };
-    } else if (stepX !== 0) {
-      current = { x: current.x + stepX, y: current.y };
-    } else {
-      current = { x: current.x, y: current.y + stepY };
-    }
-
-    addPoint(points, current);
+  if (start.x === end.x && start.y === end.y) {
+    return [{ ...start }];
   }
 
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const diag = Math.min(Math.abs(dx), Math.abs(dy));
+  const stepX = Math.sign(dx);
+  const stepY = Math.sign(dy);
+  const points: Point[] = [{ ...start }];
+
+  if (diag > 0) {
+    addPoint(points, {
+      x: start.x + stepX * diag,
+      y: start.y + stepY * diag,
+    });
+  }
+
+  addPoint(points, { x: end.x, y: end.y });
   return points;
 }
 
@@ -93,6 +92,7 @@ export function routeOctilinearOpen(stations: Point[]): string {
 }
 
 export function pathTotalLength(pathD: string): number {
+  if (!pathD) return 0;
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("d", pathD);
@@ -107,6 +107,8 @@ export function pointAtPathLength(pathD: string, distance: number): Point {
   svg.append(path);
 
   const length = path.getTotalLength();
+  if (length === 0) return { x: 0, y: 0 };
+
   const clamped = ((distance % length) + length) % length;
   const point = path.getPointAtLength(clamped);
   return { x: point.x, y: point.y };

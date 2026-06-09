@@ -12,6 +12,6 @@ export const lineDefinitions: LineDefinition[] = [
 
 export const INITIAL_STATION_COUNT = 3;
 export const MAX_STATIONS = 32;
-export const BASE_STATION_SPAWN_INTERVAL = 9;
-export const MIN_STATION_SPAWN_INTERVAL = 4;
-export const BASE_PASSENGER_SPAWN_INTERVAL = 3.5;
+export const BASE_STATION_SPAWN_INTERVAL = 22;
+export const MIN_STATION_SPAWN_INTERVAL = 14;
+export const BASE_PASSENGER_SPAWN_INTERVAL = 8;
