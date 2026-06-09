@@ -28,6 +28,7 @@ export type LineDefinition = {
 export type PlayerLine = LineDefinition & {
   stationIds: string[];
   isLoop: boolean;
+  loopHandleStationId?: string;
 };
 
 export type RoutedLine = {
