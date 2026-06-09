@@ -6,7 +6,7 @@ cd "$ROOT"
 
 npm run build
 
-cp dist/index.html index.html
+cp dist/index.source.html index.html
 rm -rf assets
 cp -R dist/assets assets
 cp dist/.nojekyll .nojekyll 2>/dev/null || touch .nojekyll
