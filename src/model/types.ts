@@ -1,8 +1,22 @@
 export type Point = { x: number; y: number };
 
+export type StationShape =
+  | "circle"
+  | "triangle"
+  | "square"
+  | "pentagon"
+  | "hexagon";
+
 export type Station = Point & {
   id: string;
   name: string;
+  shape: StationShape;
+};
+
+export type Passenger = {
+  id: string;
+  stationId: string;
+  destinationShape: StationShape;
 };
 
 export type LineDefinition = {
