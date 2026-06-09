@@ -56,11 +56,13 @@ function simplify(points: Point[]): Point[] {
   return simplified;
 }
 
-export function routeOctilinear(stations: Point[]): string {
+function buildPath(stations: Point[], closed: boolean): string {
   if (stations.length < 2) return "";
 
   const rawPoints: Point[] = [];
-  for (let i = 0; i < stations.length; i++) {
+  const segmentCount = closed ? stations.length : stations.length - 1;
+
+  for (let i = 0; i < segmentCount; i++) {
     const next = stations[(i + 1) % stations.length];
     const segment = routeSegment(stations[i], next);
     if (rawPoints.length === 0) {
@@ -77,9 +79,17 @@ export function routeOctilinear(stations: Point[]): string {
   for (let i = 1; i < points.length; i++) {
     parts.push(`L ${points[i].x} ${points[i].y}`);
   }
-  parts.push("Z");
+  if (closed) parts.push("Z");
 
   return parts.join(" ");
+}
+
+export function routeOctilinear(stations: Point[]): string {
+  return buildPath(stations, true);
+}
+
+export function routeOctilinearOpen(stations: Point[]): string {
+  return buildPath(stations, false);
 }
 
 export function pathTotalLength(pathD: string): number {

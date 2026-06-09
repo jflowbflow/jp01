@@ -4,14 +4,13 @@ on:
   push:
     branches:
       - main
-      - cursor/mini-metro-line-tracker-66db
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: pages
+  group: pages-main
   cancel-in-progress: false
 
 jobs:
@@ -33,9 +32,21 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Deploy to gh-pages branch
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
-          publish_branch: gh-pages
+      - name: Publish build to main root
+        run: |
+          cp dist/index.html index.html
+          rm -rf assets
+          cp -R dist/assets assets
+          cp dist/.nojekyll .nojekyll 2>/dev/null || touch .nojekyll
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html assets .nojekyll
+          if git diff --cached --quiet; then
+            echo "No deploy changes."
+            exit 0
+          fi
+          git commit -m "Deploy site to GitHub Pages"
+          git push

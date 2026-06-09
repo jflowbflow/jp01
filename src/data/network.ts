@@ -1,4 +1,4 @@
-import type { MetroLine, Station } from "../model/types.ts";
+import type { LineDefinition, Station } from "../model/types.ts";
 
 export const stations: Station[] = [
   { id: "s1", name: "Harbor", x: 120, y: 300 },
@@ -13,23 +13,8 @@ export const stations: Station[] = [
   { id: "s10", name: "Heights", x: 360, y: 320 },
 ];
 
-export const lines: MetroLine[] = [
-  {
-    id: "line-a",
-    name: "Orange Loop",
-    color: "#f28c28",
-    stationIds: ["s1", "s2", "s3", "s10", "s8"],
-  },
-  {
-    id: "line-b",
-    name: "Blue Loop",
-    color: "#4ea5ff",
-    stationIds: ["s3", "s4", "s5", "s6", "s9"],
-  },
-  {
-    id: "line-c",
-    name: "Green Loop",
-    color: "#5ec269",
-    stationIds: ["s1", "s8", "s7", "s6", "s5", "s9", "s10", "s2"],
-  },
+export const lineDefinitions: LineDefinition[] = [
+  { id: "line-a", name: "Orange Line", color: "#f28c28" },
+  { id: "line-b", name: "Blue Line", color: "#4ea5ff" },
+  { id: "line-c", name: "Green Line", color: "#5ec269" },
 ];

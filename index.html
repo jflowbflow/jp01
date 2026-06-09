@@ -10,10 +10,11 @@
     <div id="app">
       <header class="header">
         <h1>Line Tracker</h1>
-        <p class="subtitle">Three looping metro lines — Mini Metro style</p>
+        <p class="subtitle">Build three looping metro lines — Mini Metro style</p>
       </header>
+      <p class="status" id="status" aria-live="polite"></p>
       <main id="map" class="map" aria-label="Metro map"></main>
-      <footer class="legend" id="legend"></footer>
+      <footer class="legend" id="legend" aria-label="Line selector"></footer>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

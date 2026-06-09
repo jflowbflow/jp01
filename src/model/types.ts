@@ -5,17 +5,20 @@ export type Station = Point & {
   name: string;
 };
 
-export type MetroLine = {
+export type LineDefinition = {
   id: string;
   name: string;
   color: string;
+};
+
+export type PlayerLine = LineDefinition & {
   stationIds: string[];
+  isLoop: boolean;
 };
 
 export type RoutedLine = {
-  line: MetroLine;
+  line: PlayerLine;
   stations: Station[];
-  path: Point[];
   pathD: string;
   totalLength: number;
 };

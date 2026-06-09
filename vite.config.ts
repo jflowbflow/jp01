@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   root: ".",
-  base: "/jp01/",
+  base: "/",
   preview: {
     host: true,
     allowedHosts: true,
