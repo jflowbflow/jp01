@@ -1,4 +1,5 @@
 import { GameState, type DragOrigin } from "../game/GameState.ts";
+import { buildPendingSegments } from "../game/pendingRoute.ts";
 import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
 import { shapeLabel, stationRadius } from "../game/stationSpawner.ts";
@@ -21,9 +22,9 @@ const LINE_WIDTH = 7;
 const ROUTE_HIT_WIDTH = 22;
 const PASSENGER_SIZE = 4.5;
 const PENDING_ROUTE_OPACITY = 0.32;
-const BOUNCE_MS = 280;
-const HOLD_MS = 320;
-const HOLD_CANCEL_PX = 12;
+const BOUNCE_MS = 220;
+const DRAG_START_PX = 5;
+const UNDO_HOLD_MS = 480;
 
 type DragState = {
   origin: DragOrigin;
@@ -41,7 +42,7 @@ type BounceState = {
   origin: DragOrigin;
 };
 
-type PendingHold = {
+type PendingPointer = {
   kind: "station" | "segment" | "handle";
   pointerId: number;
   startClientX: number;
@@ -62,6 +63,7 @@ type LinePicker = {
   stationId: string;
   lines: PlayerLine[];
   pointerId: number;
+  mode: "extend" | "undo";
 };
 
 export class MapRenderer {
@@ -86,9 +88,11 @@ export class MapRenderer {
   private lastFrameTime = performance.now();
   private drag: DragState | null = null;
   private bounce: BounceState | null = null;
-  private pendingHold: PendingHold | null = null;
+  private pendingPointer: PendingPointer | null = null;
   private pan: PanState | null = null;
   private linePicker: LinePicker | null = null;
+  private undoHoldStationId: string | null = null;
+  private undoHoldProgress = 0;
   private hoveredStationId: string | null = null;
   private pendingStationRedraw = false;
   private stationShapeElements = new Map<string, SVGElement>();
@@ -178,7 +182,7 @@ export class MapRenderer {
     return (
       this.drag !== null ||
       this.bounce !== null ||
-      this.pendingHold !== null ||
+      this.pendingPointer !== null ||
       this.linePicker !== null
     );
   }
@@ -246,13 +250,14 @@ export class MapRenderer {
       this.routesGroup.append(track);
     }
 
-    for (const line of this.game.getLines()) {
-      const hasTrain = this.trainSimulation.getTrain(line.id) !== undefined;
-      if (!this.game.shouldShowPendingRoute(line.id, hasTrain)) continue;
+    const stationMap = this.getStationMap();
 
-      for (const pathD of this.buildPendingSegmentPaths(line)) {
+    for (const line of this.game.getLines()) {
+      if (!this.trainSimulation.shouldShowPendingFade(line.id, this.game)) continue;
+
+      for (const segment of buildPendingSegments(line, stationMap)) {
         const track = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        track.setAttribute("d", pathD);
+        track.setAttribute("d", segment.pathD);
         track.setAttribute("fill", "none");
         track.setAttribute("stroke", line.color);
         track.setAttribute("stroke-width", String(LINE_WIDTH));
@@ -263,54 +268,6 @@ export class MapRenderer {
         this.routesGroup.append(track);
       }
     }
-  }
-
-  private buildPendingSegmentPaths(line: PlayerLine): string[] {
-    const stationMap = this.getStationMap();
-    const active = line.activeStationIds;
-    const pending = line.stationIds;
-    const pendingStations = pending
-      .map((id) => stationMap.get(id))
-      .filter((station): station is Station => Boolean(station));
-
-    if (pendingStations.length < 2) return [];
-
-    const paths: string[] = [];
-    const pushSegment = (fromIndex: number, toIndex: number) => {
-      const from = pendingStations[fromIndex];
-      const to = pendingStations[toIndex];
-      if (!from || !to) return;
-      const pathD = routeOctilinearOpen([from, to]);
-      if (pathD) paths.push(pathD);
-    };
-
-    const isTailExtension =
-      pending.length > active.length &&
-      active.every((id, index) => pending[index] === id) &&
-      line.isLoop === line.activeIsLoop;
-
-    if (isTailExtension) {
-      for (let index = Math.max(0, active.length - 1); index < pending.length - 1; index += 1) {
-        pushSegment(index, index + 1);
-      }
-      return paths;
-    }
-
-    if (line.isLoop && !line.activeIsLoop && active.every((id, index) => pending[index] === id)) {
-      pushSegment(pending.length - 2, pending.length - 1);
-      pushSegment(pending.length - 1, 0);
-      return paths;
-    }
-
-    if (!line.activeIsLoop && line.isLoop) {
-      const full = routeOctilinear(pendingStations);
-      return full ? [full] : [];
-    }
-
-    const full = line.isLoop
-      ? routeOctilinear(pendingStations)
-      : routeOctilinearOpen(pendingStations);
-    return full ? [full] : [];
   }
 
   private drawRouteHits(): void {
@@ -418,15 +375,21 @@ export class MapRenderer {
       const onActiveLine = active.stationIds.includes(station.id);
       const isDragSource = this.drag?.origin.fromStationId === station.id;
       const isSnapTarget = this.drag?.snapTargetId === station.id;
+      const isUndoHold = this.undoHoldStationId === station.id;
       const radius =
-        onActiveLine && !active.isLoop ? baseRadius + 2 : baseRadius;
+        isUndoHold
+          ? baseRadius + 2 + this.undoHoldProgress * 3
+          : onActiveLine && !active.isLoop
+            ? baseRadius + 2
+            : baseRadius;
 
       const hitArea = createHitArea(station.x, station.y, radius);
       hitArea.dataset.stationId = station.id;
 
       const hovered = this.hoveredStationId === station.id;
-      const stroke =
-        isSnapTarget || isDragSource
+      const stroke = isUndoHold
+        ? "#e85d5d"
+        : isSnapTarget || isDragSource
           ? active.color
           : lineColors.length === 1
             ? lineColors[0]
@@ -437,9 +400,9 @@ export class MapRenderer {
                 : "#1a1a1e";
 
       const shape = createStationShape(station.shape, station.x, station.y, radius, {
-        fill: hovered || isSnapTarget ? "#fffdf8" : "#f7f5f0",
+        fill: hovered || isSnapTarget || isUndoHold ? "#fffdf8" : "#f7f5f0",
         stroke,
-        strokeWidth: isSnapTarget || lineColors.length > 1 ? 4 : 3,
+        strokeWidth: isSnapTarget || isUndoHold || lineColors.length > 1 ? 4 : 3,
       });
       shape.setAttribute("pointer-events", "none");
       this.stationShapeElements.set(station.id, shape);
@@ -660,16 +623,18 @@ export class MapRenderer {
       .map((shape) => shapeLabel(shape))
       .join(" ");
 
-    let hint = "Hold a station or line, then drag. Scroll to zoom.";
-    if (this.linePicker) hint = "Choose a line color to drag from.";
-    else if (this.drag?.origin.mode === "insert") hint = "Release on a station to insert.";
+    let hint = "Drag off a station to draw. Hold an endpoint to undo. Scroll to zoom.";
+    if (this.linePicker?.mode === "undo") hint = "Choose a line to retract.";
+    else if (this.linePicker) hint = "Choose a line color to extend.";
+    else if (this.undoHoldStationId) hint = "Hold to remove the last segment…";
+    else if (this.drag?.origin.mode === "insert") hint = "Drag to a station to insert.";
     else if (this.drag?.origin.mode === "unloop") hint = "Release to open the loop.";
-    else if (this.drag) hint = "Drag over a station to connect automatically.";
+    else if (this.drag) hint = "Drag over stations to connect.";
 
     this.statusEl.textContent =
       `Week ${this.game.getWeek()} · ${this.game.getStations().length} stations · ` +
       `Shapes: ${unlocked} · Active: ${active.name}. ${hint} ` +
-      `Lines: ${built}/3 · Loops: ${loops}/3 · Undo: Backspace`;
+      `Lines: ${built}/3 · Loops: ${loops}/3`;
   }
 
   private finishInteractionRefresh(): void {
@@ -738,9 +703,15 @@ export class MapRenderer {
     this.updateStatus();
   }
 
+  private clearUndoHold(): void {
+    this.undoHoldStationId = null;
+    this.undoHoldProgress = 0;
+  }
+
   private startDrag(origin: DragOrigin, pointerId: number, x: number, y: number): void {
     this.linePicker = null;
-    this.pendingHold = null;
+    this.pendingPointer = null;
+    this.clearUndoHold();
     this.drag = {
       origin,
       pointerId,
@@ -755,47 +726,114 @@ export class MapRenderer {
     this.updateStatus();
   }
 
-  private activatePendingHold(): void {
-    const pending = this.pendingHold;
-    if (!pending) return;
+  private tryStartStationDrag(
+    stationId: string,
+    pointerId: number,
+    clientX: number,
+    clientY: number,
+  ): void {
+    const extendable = this.game.getExtendableLinesAtStation(stationId);
+    if (extendable.length > 1) {
+      this.linePicker = {
+        stationId,
+        lines: extendable,
+        pointerId,
+        mode: "extend",
+      };
+      this.drawLinePicker();
+      this.updateStatus();
+      return;
+    }
 
+    const origin = this.game.beginDragFromStation(stationId);
+    if (!origin) return;
+
+    const station = this.getStationMap().get(stationId);
+    const point = station ?? this.clientToWorld(clientX, clientY);
+    this.startDrag(origin, pointerId, point.x, point.y);
+  }
+
+  private tryUndoHold(stationId: string, pointerId: number): void {
+    const undoable = this.game.getUndoableLinesAtStation(stationId);
+    if (undoable.length === 0) return;
+
+    this.clearUndoHold();
+
+    if (undoable.length > 1) {
+      this.linePicker = {
+        stationId,
+        lines: undoable,
+        pointerId,
+        mode: "undo",
+      };
+      this.drawLinePicker();
+      this.updateStatus();
+      return;
+    }
+
+    if (this.game.undoFromEndpoint(stationId, undoable[0].id)) {
+      this.afterRouteChange(undoable[0].id);
+      this.finishInteractionRefresh();
+    }
+  }
+
+  private startPendingDrag(pending: PendingPointer): void {
     if (pending.kind === "segment" && pending.lineId !== undefined && pending.segmentIndex !== undefined) {
       const origin = this.game.beginInsertDrag(pending.lineId, pending.segmentIndex);
-      if (origin) {
-        const point = this.clientToWorld(pending.startClientX, pending.startClientY);
-        this.startDrag(origin, pending.pointerId, point.x, point.y);
-      }
+      if (!origin) return;
+      const point = this.clientToWorld(pending.startClientX, pending.startClientY);
+      this.startDrag(origin, pending.pointerId, point.x, point.y);
       return;
     }
 
     if (pending.kind === "handle" && pending.lineId) {
       const origin = this.game.beginUnloopDrag(pending.lineId);
-      if (origin) {
-        const tip = this.getLoopHandleTip(origin.lineId);
-        const point = tip ?? this.clientToWorld(pending.startClientX, pending.startClientY);
-        this.startDrag(origin, pending.pointerId, point.x, point.y);
-      }
+      if (!origin) return;
+      const tip = this.getLoopHandleTip(origin.lineId);
+      const point = tip ?? this.clientToWorld(pending.startClientX, pending.startClientY);
+      this.startDrag(origin, pending.pointerId, point.x, point.y);
       return;
     }
 
     if (pending.kind === "station" && pending.stationId) {
-      const lines = this.game.getExtendableLinesAtStation(pending.stationId);
-      if (lines.length > 1) {
-        this.linePicker = {
-          stationId: pending.stationId,
-          lines,
-          pointerId: pending.pointerId,
-        };
-        this.pendingHold = null;
-        this.drawLinePicker();
+      this.tryStartStationDrag(
+        pending.stationId,
+        pending.pointerId,
+        pending.startClientX,
+        pending.startClientY,
+      );
+    }
+  }
+
+  private processPendingPointer(event: PointerEvent): void {
+    const pending = this.pendingPointer;
+    if (!pending || event.pointerId !== pending.pointerId) return;
+
+    const moved = Math.hypot(
+      event.clientX - pending.startClientX,
+      event.clientY - pending.startClientY,
+    );
+    const elapsed = performance.now() - pending.startedAt;
+
+    if (moved > DRAG_START_PX) {
+      this.pendingPointer = null;
+      this.clearUndoHold();
+      this.startPendingDrag(pending);
+      return;
+    }
+
+    if (pending.kind === "station" && pending.stationId) {
+      const canUndo = this.game.getUndoableLinesAtStation(pending.stationId).length > 0;
+      if (canUndo) {
+        this.undoHoldStationId = pending.stationId;
+        this.undoHoldProgress = Math.min(1, elapsed / UNDO_HOLD_MS);
+        this.redrawStations();
         this.updateStatus();
-        return;
       }
 
-      const origin = this.game.beginDragFromStation(pending.stationId);
-      if (origin) {
-        const point = this.clientToWorld(pending.startClientX, pending.startClientY);
-        this.startDrag(origin, pending.pointerId, point.x, point.y);
+      if (elapsed >= UNDO_HOLD_MS && canUndo) {
+        this.pendingPointer = null;
+        this.tryUndoHold(pending.stationId, pending.pointerId);
       }
     }
   }
@@ -820,6 +858,29 @@ export class MapRenderer {
     return null;
   }
 
+  private applyLinePickerChoice(lineId: string, pointerId: number, clientX: number, clientY: number): void {
+    if (!this.linePicker) return;
+
+    const { stationId, mode } = this.linePicker;
+    this.linePicker = null;
+    this.drawLinePicker();
+
+    if (mode === "undo") {
+      if (this.game.undoFromEndpoint(stationId, lineId)) {
+        this.afterRouteChange(lineId);
+        this.finishInteractionRefresh();
+      }
+      return;
+    }
+
+    const origin = this.game.beginDragFromStation(stationId, lineId);
+    if (!origin) return;
+
+    const station = this.getStationMap().get(stationId);
+    const point = station ?? this.clientToWorld(clientX, clientY);
+    this.startDrag(origin, pointerId, point.x, point.y);
+  }
+
   private onPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0 || this.drag || this.bounce) return;
 
@@ -829,18 +890,14 @@ export class MapRenderer {
 
     if (pickerLineId && pickerStationId) {
       event.preventDefault();
-      const origin = this.game.beginDragFromStation(pickerStationId, pickerLineId);
-      if (origin) {
-        const point = this.clientToWorld(event.clientX, event.clientY);
-        this.startDrag(origin, event.pointerId, point.x, point.y);
-      }
+      this.applyLinePickerChoice(pickerLineId, event.pointerId, event.clientX, event.clientY);
       return;
     }
 
     const loopHandleLineId = target.closest<SVGElement>("[data-loop-handle]")?.dataset.loopHandle;
     if (loopHandleLineId) {
       event.preventDefault();
-      this.pendingHold = {
+      this.pendingPointer = {
         kind: "handle",
         pointerId: event.pointerId,
         startClientX: event.clientX,
@@ -857,7 +914,7 @@ export class MapRenderer {
     const segmentIndex = segmentEl?.dataset.segmentIndex;
     if (segmentLineId && segmentIndex !== undefined) {
       event.preventDefault();
-      this.pendingHold = {
+      this.pendingPointer = {
         kind: "segment",
         pointerId: event.pointerId,
         startClientX: event.clientX,
@@ -874,7 +931,8 @@ export class MapRenderer {
     if (stationId) {
       event.preventDefault();
       this.linePicker = null;
-      this.pendingHold = {
+      this.clearUndoHold();
+      this.pendingPointer = {
         kind: "station",
         pointerId: event.pointerId,
         startClientX: event.clientX,
@@ -935,36 +993,13 @@ export class MapRenderer {
     if (this.linePicker && event.pointerId === this.linePicker.pointerId) {
       const picked = this.tryPickLineFromPointer(event.clientX, event.clientY);
       if (picked) {
-        const origin = this.game.beginDragFromStation(this.linePicker.stationId, picked);
-        if (origin) {
-          const point = this.clientToWorld(event.clientX, event.clientY);
-          this.startDrag(origin, event.pointerId, point.x, point.y);
-        }
+        this.applyLinePickerChoice(picked, event.pointerId, event.clientX, event.clientY);
       }
       return;
     }
 
-    if (this.pendingHold && event.pointerId === this.pendingHold.pointerId) {
-      const moved = Math.hypot(
-        event.clientX - this.pendingHold.startClientX,
-        event.clientY - this.pendingHold.startClientY,
-      );
-
-      if (moved > HOLD_CANCEL_PX && performance.now() - this.pendingHold.startedAt < HOLD_MS) {
-        if (this.pendingHold.kind === "station") {
-          this.pendingHold = null;
-          this.pan = {
-            pointerId: event.pointerId,
-            lastClientX: event.clientX,
-            lastClientY: event.clientY,
-          };
-          return;
-        }
-      }
-
-      if (performance.now() - this.pendingHold.startedAt >= HOLD_MS) {
-        this.activatePendingHold();
-      }
+    if (this.pendingPointer && event.pointerId === this.pendingPointer.pointerId) {
+      this.processPendingPointer(event);
       return;
     }
 
@@ -982,8 +1017,10 @@ export class MapRenderer {
       return;
     }
 
-    if (this.pendingHold && event.pointerId === this.pendingHold.pointerId) {
-      this.pendingHold = null;
+    if (this.pendingPointer && event.pointerId === this.pendingPointer.pointerId) {
+      this.pendingPointer = null;
+      this.clearUndoHold();
+      this.redrawStations();
       this.svg.releasePointerCapture(event.pointerId);
       return;
     }
@@ -1051,9 +1088,11 @@ export class MapRenderer {
   private onKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Backspace" || this.isInteracting()) return;
     event.preventDefault();
-    if (this.game.undoLastStation()) {
-      this.redrawStations();
-      this.refresh();
+    const active = this.game.getActiveLine();
+    const lastId = active.stationIds.at(-1);
+    if (lastId && this.game.undoFromEndpoint(lastId, active.id)) {
+      this.afterRouteChange(active.id);
+      this.finishInteractionRefresh();
     }
   };
 
@@ -1097,14 +1136,7 @@ export class MapRenderer {
       if (hasActiveRoutes) {
         trainPassengersChanged = this.trainSimulation.update(dt, this.game);
         this.activeRoutedLines = this.buildRoutedLines("active");
-        if (
-          this.game.getLines().some((line) =>
-            this.game.shouldShowPendingRoute(
-              line.id,
-              this.trainSimulation.getTrain(line.id) !== undefined,
-            ),
-          )
-        ) {
+        if (this.game.getLines().some((line) => this.trainSimulation.shouldShowPendingFade(line.id, this.game))) {
           this.drawRoutes();
         }
         this.drawTrains();

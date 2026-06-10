@@ -146,6 +146,15 @@ export class GameState {
     );
   }
 
+  getUndoableLinesAtStation(stationId: string): PlayerLine[] {
+    return this.lines.filter(
+      (line) =>
+        !line.isLoop &&
+        line.stationIds.length > 0 &&
+        line.stationIds[line.stationIds.length - 1] === stationId,
+    );
+  }
+
   findEmptyLine(): PlayerLine | undefined {
     return this.lines.find((line) => line.stationIds.length === 0);
   }
@@ -387,10 +396,33 @@ export class GameState {
     }
   }
 
-  shouldShowPendingRoute(lineId: string, hasTrainOnLine: boolean): boolean {
-    const line = this.getLine(lineId);
-    if (!line || !this.hasPendingRoute(line)) return false;
-    return hasTrainOnLine;
+  undoFromEndpoint(stationId: string, lineId?: string): boolean {
+    const candidates = this.getUndoableLinesAtStation(stationId);
+    const line = lineId
+      ? candidates.find((entry) => entry.id === lineId)
+      : candidates.length === 1
+        ? candidates[0]
+        : undefined;
+
+    if (!line || line.stationIds[line.stationIds.length - 1] !== stationId) {
+      return false;
+    }
+
+    line.stationIds.pop();
+
+    if (line.stationIds.length === 0) {
+      this.syncActiveRoute(line);
+      return true;
+    }
+
+    const junction = line.stationIds[line.stationIds.length - 1];
+    if (line.activeStationIds.length < 2) {
+      this.syncActiveRoute(line);
+    } else {
+      this.queueRouteChange(line.id, junction);
+    }
+
+    return true;
   }
 
   boardPassenger(passengerId: string): boolean {
@@ -411,7 +443,7 @@ export class GameState {
   getLineStatus(line: PlayerLine): string {
     if (this.hasPendingRoute(line)) return "Change pending at next stop";
     if (line.isLoop) return "Loop — drag the tail to open";
-    if (line.stationIds.length === 0) return "Hold a station to start";
+    if (line.stationIds.length === 0) return "Drag from a station to start";
     if (line.stationIds.length === 1) return "1 station";
     return `${line.stationIds.length} stations`;
   }

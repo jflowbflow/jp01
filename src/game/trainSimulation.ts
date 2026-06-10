@@ -8,6 +8,7 @@ import {
 } from "../geometry/octilinearRouter.ts";
 import type { Station, Train } from "../model/types.ts";
 import { TRAIN_CAPACITY } from "../model/types.ts";
+import { isTrainOnJunctionSegment } from "./pendingRoute.ts";
 import type { GameState } from "./GameState.ts";
 
 const DWELL_SECONDS = 0.55;
@@ -31,6 +32,20 @@ export class TrainSimulation {
 
   getTrain(lineId: string): Train | undefined {
     return this.trains.get(lineId);
+  }
+
+  isTrainOnPendingJunctionSegment(lineId: string, game: GameState): boolean {
+    const line = game.getLine(lineId);
+    const train = this.trains.get(lineId);
+    if (!line || !train || !game.hasPendingRoute(line)) return false;
+
+    const stationMap = new Map(game.getStations().map((station) => [station.id, station]));
+    return isTrainOnJunctionSegment(train, line, stationMap);
+  }
+
+  shouldShowPendingFade(lineId: string, game: GameState): boolean {
+    if (!this.trains.has(lineId)) return false;
+    return this.isTrainOnPendingJunctionSegment(lineId, game);
   }
 
   update(dt: number, game: GameState): boolean {
