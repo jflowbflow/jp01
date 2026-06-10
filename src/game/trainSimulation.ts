@@ -83,6 +83,7 @@ export class TrainSimulation {
       }
 
       const step = train.speed * dt;
+      const prevDirection = train.direction;
       const nextDistance = train.distance + step * train.direction;
       const stops = stationStopsOnPath(pathD, stations);
       const crossed = this.findCrossedStop(
@@ -118,6 +119,10 @@ export class TrainSimulation {
       } else {
         train.distance = nextDistance;
       }
+
+      if (train.direction === prevDirection) {
+        train.displayAngle = pathAngleAtLength(pathD, train.distance);
+      }
     }
 
     return passengersChanged;
@@ -149,7 +154,7 @@ export class TrainSimulation {
         train,
         x: point.x,
         y: point.y,
-        angle: pathAngleAtLength(pathD, train.distance),
+        angle: train.displayAngle,
         color: line.color,
       });
     }
@@ -162,6 +167,7 @@ export class TrainSimulation {
       lineId,
       distance: 0,
       direction: 1,
+      displayAngle: 0,
       speed: TRAIN_SPEED,
       passengers: [],
       dwellRemaining: 0,

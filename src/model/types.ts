@@ -46,6 +46,7 @@ export type Train = {
   lineId: string;
   distance: number;
   direction: 1 | -1;
+  displayAngle: number;
   speed: number;
   passengers: Passenger[];
   dwellRemaining: number;

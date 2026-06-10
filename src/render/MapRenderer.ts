@@ -2,13 +2,13 @@ import { GameState, type DragOrigin } from "../game/GameState.ts";
 import { buildPendingSegments } from "../game/pendingRoute.ts";
 import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
-import { shapeLabel, stationRadius } from "../game/stationSpawner.ts";
+import { stationRadius } from "../game/stationSpawner.ts";
 import {
   pathTotalLength,
   routeOctilinear,
   routeOctilinearOpen,
 } from "../geometry/octilinearRouter.ts";
-import type { Passenger, PlayerLine, Point, RoutedLine, Station } from "../model/types.ts";
+import type { Passenger, Point, RoutedLine, Station } from "../model/types.ts";
 import { loopHandleGeometryForLine } from "./loopHandle.ts";
 import {
   createHitArea,
@@ -59,17 +59,8 @@ type PanState = {
   lastClientY: number;
 };
 
-type LinePicker = {
-  stationId: string;
-  lines: PlayerLine[];
-  pointerId: number;
-  mode: "extend" | "undo";
-};
-
 export class MapRenderer {
   private readonly mapEl: HTMLElement;
-  private readonly legendEl: HTMLElement;
-  private readonly statusEl: HTMLElement;
   private readonly game = new GameState();
   private readonly simulation = new Simulation(this.game);
   private readonly trainSimulation = new TrainSimulation();
@@ -82,7 +73,6 @@ export class MapRenderer {
   private readonly stationsGroup: SVGGElement;
   private readonly passengersGroup: SVGGElement;
   private readonly trainsGroup: SVGGElement;
-  private readonly pickerGroup: SVGGElement;
   private activeRoutedLines: RoutedLine[] = [];
   private animationFrame = 0;
   private lastFrameTime = performance.now();
@@ -90,17 +80,14 @@ export class MapRenderer {
   private bounce: BounceState | null = null;
   private pendingPointer: PendingPointer | null = null;
   private pan: PanState | null = null;
-  private linePicker: LinePicker | null = null;
   private undoHoldStationId: string | null = null;
   private undoHoldProgress = 0;
   private hoveredStationId: string | null = null;
   private pendingStationRedraw = false;
   private stationShapeElements = new Map<string, SVGElement>();
 
-  constructor(mapEl: HTMLElement, legendEl: HTMLElement, statusEl: HTMLElement) {
+  constructor(mapEl: HTMLElement) {
     this.mapEl = mapEl;
-    this.legendEl = legendEl;
-    this.statusEl = statusEl;
     this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.svg.setAttribute("viewBox", "0 0 900 560");
     this.svg.setAttribute("role", "img");
@@ -114,7 +101,6 @@ export class MapRenderer {
     this.stationsGroup = this.createGroup("stations");
     this.passengersGroup = this.createGroup("passengers");
     this.trainsGroup = this.createGroup("trains");
-    this.pickerGroup = this.createGroup("picker");
 
     this.svg.append(
       this.routesGroup,
@@ -124,7 +110,6 @@ export class MapRenderer {
       this.stationsGroup,
       this.passengersGroup,
       this.trainsGroup,
-      this.pickerGroup,
     );
     this.mapEl.replaceChildren(this.svg);
     this.viewport.apply(this.svg);
@@ -179,12 +164,7 @@ export class MapRenderer {
   }
 
   private isInteracting(): boolean {
-    return (
-      this.drag !== null ||
-      this.bounce !== null ||
-      this.pendingPointer !== null ||
-      this.linePicker !== null
-    );
+    return this.drag !== null || this.bounce !== null || this.pendingPointer !== null;
   }
 
   private refresh(): void {
@@ -193,10 +173,7 @@ export class MapRenderer {
     this.drawRouteHits();
     this.drawLoopHandles();
     this.drawTrains();
-    this.drawLegend();
-    this.updateStatus();
     this.drawPreview();
-    this.drawLinePicker();
   }
 
   private buildRoutedLines(kind: "active" | "pending"): RoutedLine[] {
@@ -553,90 +530,6 @@ export class MapRenderer {
     this.previewGroup.append(preview);
   }
 
-  private drawLinePicker(): void {
-    this.pickerGroup.replaceChildren();
-    if (!this.linePicker) return;
-
-    const station = this.getStationMap().get(this.linePicker.stationId);
-    if (!station) return;
-
-    const count = this.linePicker.lines.length;
-    this.linePicker.lines.forEach((line, index) => {
-      const angle = (-Math.PI / 2) + ((Math.PI * 2) / count) * index;
-      const x = station.x + Math.cos(angle) * 34;
-      const y = station.y + Math.sin(angle) * 34;
-
-      const button = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      button.setAttribute("cx", String(x));
-      button.setAttribute("cy", String(y));
-      button.setAttribute("r", "11");
-      button.setAttribute("fill", line.color);
-      button.setAttribute("stroke", "#f7f5f0");
-      button.setAttribute("stroke-width", "3");
-      button.style.cursor = "pointer";
-      button.dataset.pickerLineId = line.id;
-      button.dataset.pickerStationId = this.linePicker!.stationId;
-      this.pickerGroup.append(button);
-    });
-  }
-
-  private drawLegend(): void {
-    const activeId = this.game.getActiveLineId();
-
-    this.legendEl.replaceChildren(
-      ...this.game.getLines().map((line) => {
-        const item = document.createElement("button");
-        item.type = "button";
-        item.className = `legend-item${line.id === activeId ? " legend-item--active" : ""}${line.stationIds.length === 0 ? " legend-item--empty" : ""}`;
-        item.setAttribute("aria-pressed", String(line.id === activeId));
-
-        const swatch = document.createElement("span");
-        swatch.className = "legend-swatch";
-        swatch.style.background = line.color;
-        if (line.stationIds.length === 0) {
-          swatch.style.opacity = "0.35";
-        }
-
-        const text = document.createElement("span");
-        text.className = "legend-text";
-        text.innerHTML = `<strong>${line.name}</strong><span>${this.game.getLineStatus(line)}</span>`;
-
-        item.append(swatch, text);
-        item.addEventListener("click", () => {
-          if (this.isInteracting()) return;
-          this.game.setActiveLine(line.id);
-          this.redrawStations();
-          this.refresh();
-        });
-
-        return item;
-      }),
-    );
-  }
-
-  private updateStatus(): void {
-    const active = this.game.getActiveLine();
-    const built = this.game.getLines().filter((line) => line.stationIds.length > 0).length;
-    const loops = this.game.getLines().filter((line) => line.isLoop).length;
-    const unlocked = this.game
-      .getUnlockedShapes()
-      .map((shape) => shapeLabel(shape))
-      .join(" ");
-
-    let hint = "Drag off a station to draw. Hold an endpoint to undo. Scroll to zoom.";
-    if (this.linePicker?.mode === "undo") hint = "Choose a line to retract.";
-    else if (this.linePicker) hint = "Choose a line color to extend.";
-    else if (this.undoHoldStationId) hint = "Hold to remove the last segment…";
-    else if (this.drag?.origin.mode === "insert") hint = "Drag to a station to insert.";
-    else if (this.drag?.origin.mode === "unloop") hint = "Release to open the loop.";
-    else if (this.drag) hint = "Drag over stations to connect.";
-
-    this.statusEl.textContent =
-      `Week ${this.game.getWeek()} · ${this.game.getStations().length} stations · ` +
-      `Shapes: ${unlocked} · Active: ${active.name}. ${hint} ` +
-      `Lines: ${built}/3 · Loops: ${loops}/3`;
-  }
-
   private finishInteractionRefresh(): void {
     if (this.pendingStationRedraw) {
       this.pendingStationRedraw = false;
@@ -700,7 +593,6 @@ export class MapRenderer {
     this.drawRoutes();
     this.drawPreview();
     this.redrawStations();
-    this.updateStatus();
   }
 
   private clearUndoHold(): void {
@@ -709,7 +601,6 @@ export class MapRenderer {
   }
 
   private startDrag(origin: DragOrigin, pointerId: number, x: number, y: number): void {
-    this.linePicker = null;
     this.pendingPointer = null;
     this.clearUndoHold();
     this.drag = {
@@ -723,7 +614,6 @@ export class MapRenderer {
     this.svg.style.cursor = "grabbing";
     this.drawPreview();
     this.redrawStations();
-    this.updateStatus();
   }
 
   private tryStartStationDrag(
@@ -732,19 +622,6 @@ export class MapRenderer {
     clientX: number,
     clientY: number,
   ): void {
-    const extendable = this.game.getExtendableLinesAtStation(stationId);
-    if (extendable.length > 1) {
-      this.linePicker = {
-        stationId,
-        lines: extendable,
-        pointerId,
-        mode: "extend",
-      };
-      this.drawLinePicker();
-      this.updateStatus();
-      return;
-    }
-
     const origin = this.game.beginDragFromStation(stationId);
     if (!origin) return;
 
@@ -753,26 +630,17 @@ export class MapRenderer {
     this.startDrag(origin, pointerId, point.x, point.y);
   }
 
-  private tryUndoHold(stationId: string, pointerId: number): void {
-    const undoable = this.game.getUndoableLinesAtStation(stationId);
-    if (undoable.length === 0) return;
+  private tryRemoveHold(stationId: string): void {
+    const removable = this.game.getRemovableLinesAtStation(stationId);
+    if (removable.length === 0) return;
 
     this.clearUndoHold();
 
-    if (undoable.length > 1) {
-      this.linePicker = {
-        stationId,
-        lines: undoable,
-        pointerId,
-        mode: "undo",
-      };
-      this.drawLinePicker();
-      this.updateStatus();
-      return;
-    }
+    const preferred =
+      removable.find((line) => line.id === this.game.getActiveLineId()) ?? removable[0];
 
-    if (this.game.undoFromEndpoint(stationId, undoable[0].id)) {
-      this.afterRouteChange(undoable[0].id);
+    if (this.game.removeStationFromLine(stationId, preferred.id)) {
+      this.afterRouteChange(preferred.id);
       this.finishInteractionRefresh();
     }
   }
@@ -823,77 +691,24 @@ export class MapRenderer {
     }
 
     if (pending.kind === "station" && pending.stationId) {
-      const canUndo = this.game.getUndoableLinesAtStation(pending.stationId).length > 0;
-      if (canUndo) {
+      const canRemove = this.game.getRemovableLinesAtStation(pending.stationId).length > 0;
+      if (canRemove) {
         this.undoHoldStationId = pending.stationId;
         this.undoHoldProgress = Math.min(1, elapsed / UNDO_HOLD_MS);
         this.redrawStations();
-        this.updateStatus();
       }
 
-      if (elapsed >= UNDO_HOLD_MS && canUndo) {
+      if (elapsed >= UNDO_HOLD_MS && canRemove) {
         this.pendingPointer = null;
-        this.tryUndoHold(pending.stationId, pending.pointerId);
+        this.tryRemoveHold(pending.stationId);
       }
     }
-  }
-
-  private tryPickLineFromPointer(clientX: number, clientY: number): string | null {
-    if (!this.linePicker) return null;
-
-    const point = this.clientToWorld(clientX, clientY);
-    const station = this.getStationMap().get(this.linePicker.stationId);
-    if (!station) return null;
-
-    for (const line of this.linePicker.lines) {
-      const index = this.linePicker.lines.indexOf(line);
-      const angle = (-Math.PI / 2) + ((Math.PI * 2) / this.linePicker.lines.length) * index;
-      const x = station.x + Math.cos(angle) * 34;
-      const y = station.y + Math.sin(angle) * 34;
-      if (Math.hypot(point.x - x, point.y - y) <= 14) {
-        return line.id;
-      }
-    }
-
-    return null;
-  }
-
-  private applyLinePickerChoice(lineId: string, pointerId: number, clientX: number, clientY: number): void {
-    if (!this.linePicker) return;
-
-    const { stationId, mode } = this.linePicker;
-    this.linePicker = null;
-    this.drawLinePicker();
-
-    if (mode === "undo") {
-      if (this.game.undoFromEndpoint(stationId, lineId)) {
-        this.afterRouteChange(lineId);
-        this.finishInteractionRefresh();
-      }
-      return;
-    }
-
-    const origin = this.game.beginDragFromStation(stationId, lineId);
-    if (!origin) return;
-
-    const station = this.getStationMap().get(stationId);
-    const point = station ?? this.clientToWorld(clientX, clientY);
-    this.startDrag(origin, pointerId, point.x, point.y);
   }
 
   private onPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0 || this.drag || this.bounce) return;
 
     const target = event.target as Element;
-    const pickerLineId = target.closest<SVGElement>("[data-picker-line-id]")?.dataset.pickerLineId;
-    const pickerStationId = target.closest<SVGElement>("[data-picker-station-id]")?.dataset.pickerStationId;
-
-    if (pickerLineId && pickerStationId) {
-      event.preventDefault();
-      this.applyLinePickerChoice(pickerLineId, event.pointerId, event.clientX, event.clientY);
-      return;
-    }
-
     const loopHandleLineId = target.closest<SVGElement>("[data-loop-handle]")?.dataset.loopHandle;
     if (loopHandleLineId) {
       event.preventDefault();
@@ -930,7 +745,6 @@ export class MapRenderer {
     const stationId = target.closest<SVGElement>("[data-station-id]")?.dataset.stationId;
     if (stationId) {
       event.preventDefault();
-      this.linePicker = null;
       this.clearUndoHold();
       this.pendingPointer = {
         kind: "station",
@@ -944,7 +758,6 @@ export class MapRenderer {
       return;
     }
 
-    this.linePicker = null;
     this.pan = {
       pointerId: event.pointerId,
       lastClientX: event.clientX,
@@ -990,14 +803,6 @@ export class MapRenderer {
       return;
     }
 
-    if (this.linePicker && event.pointerId === this.linePicker.pointerId) {
-      const picked = this.tryPickLineFromPointer(event.clientX, event.clientY);
-      if (picked) {
-        this.applyLinePickerChoice(picked, event.pointerId, event.clientX, event.clientY);
-      }
-      return;
-    }
-
     if (this.pendingPointer && event.pointerId === this.pendingPointer.pointerId) {
       this.processPendingPointer(event);
       return;
@@ -1021,14 +826,6 @@ export class MapRenderer {
       this.pendingPointer = null;
       this.clearUndoHold();
       this.redrawStations();
-      this.svg.releasePointerCapture(event.pointerId);
-      return;
-    }
-
-    if (this.linePicker && event.pointerId === this.linePicker.pointerId && !this.drag) {
-      this.linePicker = null;
-      this.drawLinePicker();
-      this.updateStatus();
       this.svg.releasePointerCapture(event.pointerId);
       return;
     }
@@ -1076,7 +873,6 @@ export class MapRenderer {
 
     this.drawPreview();
     this.redrawStations();
-    this.updateStatus();
   };
 
   private onWheel = (event: WheelEvent): void => {
@@ -1090,7 +886,7 @@ export class MapRenderer {
     event.preventDefault();
     const active = this.game.getActiveLine();
     const lastId = active.stationIds.at(-1);
-    if (lastId && this.game.undoFromEndpoint(lastId, active.id)) {
+    if (lastId && this.game.removeStationFromLine(lastId, active.id)) {
       this.afterRouteChange(active.id);
       this.finishInteractionRefresh();
     }
@@ -1117,7 +913,6 @@ export class MapRenderer {
         }
       } else if ((worldUpdate.passengersChanged || trainPassengersChanged) && !this.isInteracting()) {
         this.drawPassengers();
-        this.updateStatus();
       }
 
       if (this.bounce) {

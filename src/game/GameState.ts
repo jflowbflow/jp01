@@ -146,13 +146,8 @@ export class GameState {
     );
   }
 
-  getUndoableLinesAtStation(stationId: string): PlayerLine[] {
-    return this.lines.filter(
-      (line) =>
-        !line.isLoop &&
-        line.stationIds.length > 0 &&
-        line.stationIds[line.stationIds.length - 1] === stationId,
-    );
+  getRemovableLinesAtStation(stationId: string): PlayerLine[] {
+    return this.lines.filter((line) => line.stationIds.includes(stationId));
   }
 
   findEmptyLine(): PlayerLine | undefined {
@@ -176,16 +171,17 @@ export class GameState {
 
     if (!lineId) {
       const candidates = this.getExtendableLinesAtStation(stationId);
-      if (candidates.length === 1) {
-        this.activeLineId = candidates[0].id;
+      if (candidates.length >= 1) {
+        const preferred =
+          candidates.find((line) => line.id === this.activeLineId) ?? candidates[0];
+        this.activeLineId = preferred.id;
         return {
-          lineId: candidates[0].id,
+          lineId: preferred.id,
           fromStationId: stationId,
           addedOnDragStart: false,
           mode: "extend",
         };
       }
-      if (candidates.length > 1) return null;
     }
 
     if (this.isStationOnLine(stationId)) return null;
@@ -396,26 +392,32 @@ export class GameState {
     }
   }
 
-  undoFromEndpoint(stationId: string, lineId?: string): boolean {
-    const candidates = this.getUndoableLinesAtStation(stationId);
+  removeStationFromLine(stationId: string, lineId?: string): boolean {
+    const candidates = this.getRemovableLinesAtStation(stationId);
     const line = lineId
       ? candidates.find((entry) => entry.id === lineId)
-      : candidates.length === 1
-        ? candidates[0]
-        : undefined;
+      : candidates.find((entry) => entry.id === this.activeLineId) ?? candidates[0];
 
-    if (!line || line.stationIds[line.stationIds.length - 1] !== stationId) {
-      return false;
+    if (!line) return false;
+
+    const index = line.stationIds.indexOf(stationId);
+    if (index < 0) return false;
+
+    if (line.isLoop) {
+      line.isLoop = false;
+      line.loopHandleStationId = undefined;
     }
 
-    line.stationIds.pop();
+    line.stationIds.splice(index, 1);
 
     if (line.stationIds.length === 0) {
       this.syncActiveRoute(line);
       return true;
     }
 
-    const junction = line.stationIds[line.stationIds.length - 1];
+    const junctionIndex = Math.min(index, line.stationIds.length - 1);
+    const junction = line.stationIds[junctionIndex];
+
     if (line.activeStationIds.length < 2) {
       this.syncActiveRoute(line);
     } else {
