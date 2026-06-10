@@ -8,7 +8,7 @@ import {
   routeOctilinearOpen,
 } from "../geometry/octilinearRouter.ts";
 import type { Passenger, PlayerLine, Point, RoutedLine, Station } from "../model/types.ts";
-import { loopHandlePath, loopHandleTip } from "./loopHandle.ts";
+import { loopHandleGeometryForLine } from "./loopHandle.ts";
 import {
   createHitArea,
   createStationShape,
@@ -247,7 +247,8 @@ export class MapRenderer {
     }
 
     for (const line of this.game.getLines()) {
-      if (!this.game.hasPendingRoute(line)) continue;
+      const hasTrain = this.trainSimulation.getTrain(line.id) !== undefined;
+      if (!this.game.shouldShowPendingRoute(line.id, hasTrain)) continue;
 
       for (const pathD of this.buildPendingSegmentPaths(line)) {
         const track = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -359,38 +360,45 @@ export class MapRenderer {
     for (const line of this.game.getLines()) {
       if (!line.isLoop || !line.loopHandleStationId) continue;
 
-      const station = stationMap.get(line.loopHandleStationId);
-      if (!station) continue;
+      const geometry = loopHandleGeometryForLine(
+        line.stationIds,
+        line.loopHandleStationId,
+        stationMap,
+      );
+      if (!geometry) continue;
 
-      const tip = loopHandleTip(station);
-      const stem = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      stem.setAttribute("d", loopHandlePath(station));
-      stem.setAttribute("fill", "none");
-      stem.setAttribute("stroke", line.color);
-      stem.setAttribute("stroke-width", String(LINE_WIDTH));
-      stem.setAttribute("stroke-linecap", "round");
-      stem.setAttribute("pointer-events", "none");
+      const stub = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      stub.setAttribute("d", geometry.stubPath);
+      stub.setAttribute("fill", "none");
+      stub.setAttribute("stroke", line.color);
+      stub.setAttribute("stroke-width", String(LINE_WIDTH));
+      stub.setAttribute("stroke-linecap", "round");
+      stub.setAttribute("pointer-events", "none");
 
-      const knob = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      knob.setAttribute("cx", String(tip.x));
-      knob.setAttribute("cy", String(tip.y));
-      knob.setAttribute("r", "8");
-      knob.setAttribute("fill", "#f7f5f0");
-      knob.setAttribute("stroke", line.color);
-      knob.setAttribute("stroke-width", "3");
-      knob.style.cursor = "grab";
-      knob.dataset.loopHandle = line.id;
-
-      const hit = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      hit.setAttribute("cx", String(tip.x));
-      hit.setAttribute("cy", String(tip.y));
-      hit.setAttribute("r", "16");
-      hit.setAttribute("fill", "transparent");
+      const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      hit.setAttribute("d", geometry.stubPath);
+      hit.setAttribute("fill", "none");
+      hit.setAttribute("stroke", "transparent");
+      hit.setAttribute("stroke-width", String(ROUTE_HIT_WIDTH));
+      hit.setAttribute("stroke-linecap", "round");
       hit.style.cursor = "grab";
       hit.dataset.loopHandle = line.id;
 
-      this.handlesGroup.append(stem, knob, hit);
+      this.handlesGroup.append(stub, hit);
     }
+  }
+
+  private getLoopHandleTip(lineId: string): Point | null {
+    const line = this.game.getLine(lineId);
+    if (!line?.loopHandleStationId) return null;
+
+    return (
+      loopHandleGeometryForLine(
+        line.stationIds,
+        line.loopHandleStationId,
+        this.getStationMap(),
+      )?.tip ?? null
+    );
   }
 
   private drawStations(): void {
@@ -529,9 +537,9 @@ export class MapRenderer {
       lineColor = line.color;
 
       if (drag.origin.mode === "unloop") {
-        const station = stationMap.get(drag.origin.fromStationId);
-        if (!station) return;
-        fromPoint = loopHandleTip(station);
+        const tip = this.getLoopHandleTip(drag.origin.lineId);
+        if (!tip) return;
+        fromPoint = tip;
       } else {
         const station = stationMap.get(drag.origin.fromStationId);
         if (!station) return;
@@ -552,7 +560,7 @@ export class MapRenderer {
 
       fromPoint =
         bounce.origin.mode === "unloop"
-          ? loopHandleTip(station)
+          ? (this.getLoopHandleTip(bounce.lineId) ?? station)
           : station;
 
       const elapsed = performance.now() - bounce.startTime;
@@ -668,8 +676,21 @@ export class MapRenderer {
     if (this.pendingStationRedraw) {
       this.pendingStationRedraw = false;
     }
+    for (const line of this.game.getLines()) {
+      this.game.finalizeRouteChange(
+        line.id,
+        this.trainSimulation.getTrain(line.id) !== undefined,
+      );
+    }
     this.redrawStations();
     this.refresh();
+  }
+
+  private afterRouteChange(lineId: string): void {
+    this.game.finalizeRouteChange(
+      lineId,
+      this.trainSimulation.getTrain(lineId) !== undefined,
+    );
   }
 
   private tryAutoAnchor(): void {
@@ -677,6 +698,8 @@ export class MapRenderer {
 
     const { origin, snapTargetId, pointerId } = this.drag;
     if (!this.game.connectDragTarget(origin, snapTargetId)) return;
+
+    this.afterRouteChange(origin.lineId);
 
     const station = this.getStationMap().get(snapTargetId);
     const line = this.game.getLine(origin.lineId);
@@ -748,8 +771,8 @@ export class MapRenderer {
     if (pending.kind === "handle" && pending.lineId) {
       const origin = this.game.beginUnloopDrag(pending.lineId);
       if (origin) {
-        const station = this.getStationMap().get(origin.fromStationId);
-        const point = station ? loopHandleTip(station) : this.clientToWorld(pending.startClientX, pending.startClientY);
+        const tip = this.getLoopHandleTip(origin.lineId);
+        const point = tip ?? this.clientToWorld(pending.startClientX, pending.startClientY);
         this.startDrag(origin, pending.pointerId, point.x, point.y);
       }
       return;
@@ -982,11 +1005,13 @@ export class MapRenderer {
 
     if (origin.mode === "unloop") {
       this.game.unloopLine(origin.lineId);
+      this.afterRouteChange(origin.lineId);
       this.finishInteractionRefresh();
       return;
     }
 
     if (snapTargetId && this.game.connectDragTarget(origin, snapTargetId)) {
+      this.afterRouteChange(origin.lineId);
       this.finishInteractionRefresh();
       return;
     }
@@ -1072,7 +1097,14 @@ export class MapRenderer {
       if (hasActiveRoutes) {
         trainPassengersChanged = this.trainSimulation.update(dt, this.game);
         this.activeRoutedLines = this.buildRoutedLines("active");
-        if (this.game.getLines().some((line) => this.game.hasPendingRoute(line))) {
+        if (
+          this.game.getLines().some((line) =>
+            this.game.shouldShowPendingRoute(
+              line.id,
+              this.trainSimulation.getTrain(line.id) !== undefined,
+            ),
+          )
+        ) {
           this.drawRoutes();
         }
         this.drawTrains();

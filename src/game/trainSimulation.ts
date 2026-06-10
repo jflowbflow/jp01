@@ -12,7 +12,7 @@ import type { GameState } from "./GameState.ts";
 
 const DWELL_SECONDS = 0.55;
 const STATION_THRESHOLD = 10;
-const BASE_SPEED = 42;
+const TRAIN_SPEED = 48;
 
 export type TrainRenderState = {
   train: Train;
@@ -67,7 +67,8 @@ export class TrainSimulation {
         continue;
       }
 
-      const nextDistance = train.distance + train.speed * dt * train.direction;
+      const step = train.speed * dt;
+      const nextDistance = train.distance + step * train.direction;
       const stops = stationStopsOnPath(pathD, stations);
       const crossed = this.findCrossedStop(
         train,
@@ -146,7 +147,7 @@ export class TrainSimulation {
       lineId,
       distance: 0,
       direction: 1,
-      speed: BASE_SPEED,
+      speed: TRAIN_SPEED,
       passengers: [],
       dwellRemaining: 0,
       lastStationId: null,

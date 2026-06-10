@@ -378,6 +378,21 @@ export class GameState {
     return true;
   }
 
+  finalizeRouteChange(lineId: string, hasTrainOnLine: boolean): void {
+    const line = this.getLine(lineId);
+    if (!line) return;
+
+    if (!hasTrainOnLine) {
+      this.syncActiveRoute(line);
+    }
+  }
+
+  shouldShowPendingRoute(lineId: string, hasTrainOnLine: boolean): boolean {
+    const line = this.getLine(lineId);
+    if (!line || !this.hasPendingRoute(line)) return false;
+    return hasTrainOnLine;
+  }
+
   boardPassenger(passengerId: string): boolean {
     const index = this.passengers.findIndex((passenger) => passenger.id === passengerId);
     if (index < 0) return false;
