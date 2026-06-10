@@ -83,7 +83,6 @@ export class TrainSimulation {
       }
 
       const step = train.speed * dt;
-      const prevDirection = train.direction;
       const nextDistance = train.distance + step * train.direction;
       const stops = stationStopsOnPath(pathD, stations);
       const crossed = this.findCrossedStop(
@@ -97,6 +96,7 @@ export class TrainSimulation {
 
       if (crossed) {
         train.distance = crossed.distance;
+        train.displayAngle = pathAngleAtLength(pathD, train.distance);
         if (game.applyPendingAtStation(line.id, crossed.stationId)) {
           passengersChanged = true;
         }
@@ -120,9 +120,7 @@ export class TrainSimulation {
         train.distance = nextDistance;
       }
 
-      if (train.direction === prevDirection) {
-        train.displayAngle = pathAngleAtLength(pathD, train.distance);
-      }
+      train.displayAngle = pathAngleAtLength(pathD, train.distance);
     }
 
     return passengersChanged;

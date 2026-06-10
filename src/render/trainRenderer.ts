@@ -19,11 +19,9 @@ export function createTrainElement(state: TrainRenderState): SVGGElement {
   const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
   group.setAttribute("pointer-events", "none");
 
-  const angleDeg = (state.angle * 180) / Math.PI;
-  const flip = state.train.direction < 0 ? -1 : 1;
   group.setAttribute(
     "transform",
-    `translate(${state.x} ${state.y}) rotate(${angleDeg}) scale(${flip} 1)`,
+    `translate(${state.x} ${state.y}) rotate(${(state.angle * 180) / Math.PI})`,
   );
 
   const body = document.createElementNS("http://www.w3.org/2000/svg", "rect");
@@ -42,7 +40,7 @@ export function createTrainElement(state: TrainRenderState): SVGGElement {
     const offset = SLOT_OFFSETS[index];
     const icon = createStationShape(
       passenger.destinationShape as StationShape,
-      offset.x * flip,
+      offset.x,
       offset.y,
       SLOT_SIZE,
       {
