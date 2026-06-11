@@ -8,6 +8,7 @@ import {
 } from "../geometry/octilinearRouter.ts";
 import type { Station, Train } from "../model/types.ts";
 import { TRAIN_CAPACITY } from "../model/types.ts";
+import { getTrainAtStationOnLine } from "./pendingRoute.ts";
 import type { GameState } from "./GameState.ts";
 
 const DWELL_SECONDS = 0.55;
@@ -67,6 +68,16 @@ export class TrainSimulation {
 
       const totalLength = pathTotalLength(pathD);
       if (totalLength === 0) continue;
+
+      const atStationId = getTrainAtStationOnLine(train, line, stationMap);
+      if (
+        atStationId &&
+        game.hasPendingRoute(line) &&
+        game.applyPendingAtStation(line.id, atStationId, train)
+      ) {
+        passengersChanged = true;
+        continue;
+      }
 
       if (train.dwellRemaining > 0) {
         train.dwellRemaining = Math.max(0, train.dwellRemaining - dt);

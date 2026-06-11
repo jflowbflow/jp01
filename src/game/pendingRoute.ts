@@ -14,6 +14,7 @@ export type PendingSegment = {
 };
 
 const SEGMENT_MARGIN = 6;
+const STATION_AT_THRESHOLD = 10;
 
 function directedKey(fromId: string, toId: string): string {
   return `${fromId}>${toId}`;
@@ -126,6 +127,39 @@ export function buildPendingSegments(
   return segments;
 }
 
+function getTrainAtStationId(
+  train: Train,
+  stops: { stationId: string; distance: number }[],
+): string | null {
+  for (const stop of stops) {
+    if (Math.abs(train.distance - stop.distance) <= STATION_AT_THRESHOLD) {
+      return stop.stationId;
+    }
+  }
+
+  return null;
+}
+
+export function getTrainAtStationOnLine(
+  train: Train,
+  line: PlayerLine,
+  stationMap: Map<string, Station>,
+): string | null {
+  if (line.activeStationIds.length < 2) return null;
+
+  const activeStations = line.activeStationIds
+    .map((id) => stationMap.get(id))
+    .filter((station): station is Station => Boolean(station));
+
+  const pathD = line.activeIsLoop
+    ? routeOctilinear(activeStations)
+    : routeOctilinearOpen(activeStations);
+
+  if (!pathD) return null;
+
+  return getTrainAtStationId(train, stationStopsOnPath(pathD, activeStations));
+}
+
 function distanceOnSegment(
   distance: number,
   from: number,
@@ -172,6 +206,11 @@ export function isTrainOnRouteSegment(
   const toStop = stops.find((stop) => stop.stationId === segment.toId);
   if (!fromStop || !toStop) return false;
 
+  const atStationId = getTrainAtStationId(train, stops);
+  if (atStationId === segment.fromId || atStationId === segment.toId) {
+    return false;
+  }
+
   return distanceOnSegment(
     train.distance,
     fromStop.distance,
@@ -206,6 +245,12 @@ export function canApplyRouteChangeNow(
   }
 
   if (!train) return true;
+
+  const atStationId = getTrainAtStationOnLine(train, line, stationMap);
+  if (atStationId && getApplyStationIds(line).includes(atStationId)) {
+    return true;
+  }
+
   return !isTrainOnAffectedSegments(train, line, stationMap);
 }
 
