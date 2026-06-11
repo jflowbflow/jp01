@@ -8,7 +8,6 @@ import {
 } from "../geometry/octilinearRouter.ts";
 import type { Station, Train } from "../model/types.ts";
 import { TRAIN_CAPACITY } from "../model/types.ts";
-import { isTrainOnJunctionSegment } from "./pendingRoute.ts";
 import type { GameState } from "./GameState.ts";
 
 const DWELL_SECONDS = 0.55;
@@ -34,18 +33,10 @@ export class TrainSimulation {
     return this.trains.get(lineId);
   }
 
-  isTrainOnPendingJunctionSegment(lineId: string, game: GameState): boolean {
-    const line = game.getLine(lineId);
-    const train = this.trains.get(lineId);
-    if (!line || !train || !game.hasPendingRoute(line)) return false;
-
-    const stationMap = new Map(game.getStations().map((station) => [station.id, station]));
-    return isTrainOnJunctionSegment(train, line, stationMap);
-  }
-
   shouldShowPendingFade(lineId: string, game: GameState): boolean {
-    if (!this.trains.has(lineId)) return false;
-    return this.isTrainOnPendingJunctionSegment(lineId, game);
+    const line = game.getLine(lineId);
+    if (!line || !game.hasPendingRoute(line)) return false;
+    return this.trains.has(lineId);
   }
 
   update(dt: number, game: GameState): boolean {
@@ -97,7 +88,7 @@ export class TrainSimulation {
       if (crossed) {
         train.distance = crossed.distance;
         train.displayAngle = pathAngleAtLength(pathD, train.distance);
-        if (game.applyPendingAtStation(line.id, crossed.stationId)) {
+        if (game.applyPendingAtStation(line.id, crossed.stationId, train)) {
           passengersChanged = true;
         }
         if (this.handleStationStop(train, crossed.stationId, game, stationMap)) {

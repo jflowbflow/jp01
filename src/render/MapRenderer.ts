@@ -535,20 +535,14 @@ export class MapRenderer {
       this.pendingStationRedraw = false;
     }
     for (const line of this.game.getLines()) {
-      this.game.finalizeRouteChange(
-        line.id,
-        this.trainSimulation.getTrain(line.id) !== undefined,
-      );
+      this.game.finalizeRouteChange(line.id, this.trainSimulation.getTrain(line.id));
     }
     this.redrawStations();
     this.refresh();
   }
 
   private afterRouteChange(lineId: string): void {
-    this.game.finalizeRouteChange(
-      lineId,
-      this.trainSimulation.getTrain(lineId) !== undefined,
-    );
+    this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
   }
 
   private tryAutoAnchor(): void {
@@ -931,7 +925,13 @@ export class MapRenderer {
       if (hasActiveRoutes) {
         trainPassengersChanged = this.trainSimulation.update(dt, this.game);
         this.activeRoutedLines = this.buildRoutedLines("active");
-        if (this.game.getLines().some((line) => this.trainSimulation.shouldShowPendingFade(line.id, this.game))) {
+        if (
+          this.game.getLines().some(
+            (line) =>
+              this.game.hasPendingRoute(line) ||
+              this.trainSimulation.shouldShowPendingFade(line.id, this.game),
+          )
+        ) {
           this.drawRoutes();
         }
         this.drawTrains();

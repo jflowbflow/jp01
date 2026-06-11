@@ -13,7 +13,13 @@ import {
   pickStationShape,
   stationRadius,
 } from "./stationSpawner.ts";
-import type { Passenger, PlayerLine, Station, StationShape } from "../model/types.ts";
+import {
+  canApplyRouteChangeNow,
+  getApplyStationIds,
+  pickJunctionForStationRemoval,
+  remapTrainToPendingRoute,
+} from "./pendingRoute.ts";
+import type { Passenger, PlayerLine, Station, StationShape, Train } from "../model/types.ts";
 
 export type DragMode = "extend" | "insert" | "new" | "unloop";
 
@@ -376,20 +382,39 @@ export class GameState {
     line.pendingApplyStationId = undefined;
   }
 
-  applyPendingAtStation(lineId: string, stationId: string): boolean {
+  applyPendingAtStation(
+    lineId: string,
+    stationId: string,
+    train?: Train,
+  ): boolean {
     const line = this.getLine(lineId);
-    if (!line || line.pendingApplyStationId !== stationId) return false;
+    if (!line || !this.hasPendingRoute(line)) return false;
+    if (!getApplyStationIds(line).includes(stationId)) return false;
+
+    if (train) {
+      remapTrainToPendingRoute(train, line, this.getStationMap());
+    }
+
     this.syncActiveRoute(line);
     return true;
   }
 
-  finalizeRouteChange(lineId: string, hasTrainOnLine: boolean): void {
+  finalizeRouteChange(lineId: string, train?: Train): void {
     const line = this.getLine(lineId);
-    if (!line) return;
+    if (!line || !this.hasPendingRoute(line)) return;
 
-    if (!hasTrainOnLine) {
-      this.syncActiveRoute(line);
+    const stationMap = this.getStationMap();
+    if (!canApplyRouteChangeNow(train, line, stationMap)) return;
+
+    if (train) {
+      remapTrainToPendingRoute(train, line, stationMap);
     }
+
+    this.syncActiveRoute(line);
+  }
+
+  private getStationMap(): Map<string, Station> {
+    return new Map(this.stations.map((station) => [station.id, station]));
   }
 
   removeStationFromLine(stationId: string, lineId?: string): boolean {
@@ -403,6 +428,8 @@ export class GameState {
     const index = line.stationIds.indexOf(stationId);
     if (index < 0) return false;
 
+    const junction = pickJunctionForStationRemoval(line, stationId);
+
     if (line.isLoop) {
       line.isLoop = false;
       line.loopHandleStationId = undefined;
@@ -415,12 +442,9 @@ export class GameState {
       return true;
     }
 
-    const junctionIndex = Math.min(index, line.stationIds.length - 1);
-    const junction = line.stationIds[junctionIndex];
-
-    if (line.activeStationIds.length < 2) {
+    if (line.stationIds.length === 1 || line.activeStationIds.length < 2) {
       this.syncActiveRoute(line);
-    } else {
+    } else if (junction) {
       this.queueRouteChange(line.id, junction);
     }
 
