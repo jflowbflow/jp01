@@ -243,85 +243,26 @@ export class MapRenderer {
     return undefined;
   }
 
-  private getInsertOmitSegment():
-    | { lineId: string; fromId: string; toId: string }
-    | null {
-    const origin =
-      this.drag?.origin.mode === "insert"
-        ? this.drag.origin
-        : this.bounce?.origin.mode === "insert"
-          ? this.bounce.origin
-          : undefined;
-
-    if (!origin || origin.insertAfterIndex === undefined) {
-      return null;
+  private getDragFadeLineId(): string | null {
+    if (this.drag && this.drag.origin.mode !== "new" && !this.drag.snapTargetId) {
+      return this.drag.origin.lineId;
     }
 
-    const line = this.game.getLine(origin.lineId);
-    if (!line) return null;
-
-    const route = this.game.getActiveRoute(line);
-    const fromId = route.stationIds[origin.insertAfterIndex];
-    if (!fromId) return null;
-
-    let toId: string | undefined;
-    if (origin.insertAfterIndex < route.stationIds.length - 1) {
-      toId = route.stationIds[origin.insertAfterIndex + 1];
-    } else if (route.isLoop) {
-      toId = route.stationIds[0];
+    if (this.bounce && this.bounce.origin.mode !== "new") {
+      return this.bounce.lineId;
     }
 
-    if (!toId) return null;
-
-    return { lineId: line.id, fromId, toId };
-  }
-
-  private drawRouteSegments(
-    parent: SVGGElement,
-    stationIds: string[],
-    isLoop: boolean,
-    color: string,
-    omitSegment?: { fromId: string; toId: string },
-  ): void {
-    const stationMap = this.getStationMap();
-    const segmentCount = isLoop ? stationIds.length : stationIds.length - 1;
-
-    for (let index = 0; index < segmentCount; index += 1) {
-      const fromId = stationIds[index];
-      const toId =
-        index < stationIds.length - 1 ? stationIds[index + 1] : stationIds[0];
-
-      if (omitSegment && fromId === omitSegment.fromId && toId === omitSegment.toId) {
-        continue;
-      }
-
-      const from = stationMap.get(fromId);
-      const to = stationMap.get(toId);
-      if (!from || !to) continue;
-
-      const pathD = routeOctilinearOpen([from, to]);
-      if (pathD) this.appendRouteTrack(parent, pathD, color);
-    }
+    return null;
   }
 
   private drawRoutes(): void {
     this.routesGroup.replaceChildren();
-    const omitSegment = this.getInsertOmitSegment();
+    const fadeLineId = this.getDragFadeLineId();
 
     for (const routed of this.activeRoutedLines) {
-      if (omitSegment && omitSegment.lineId === routed.line.id) {
-        const route = this.game.getActiveRoute(routed.line);
-        this.drawRouteSegments(
-          this.routesGroup,
-          route.stationIds,
-          route.isLoop,
-          routed.line.color,
-          omitSegment,
-        );
-        continue;
-      }
-
-      this.appendRouteTrack(this.routesGroup, routed.pathD, routed.line.color);
+      const opacity =
+        fadeLineId === routed.line.id ? String(PENDING_ROUTE_OPACITY) : "0.95";
+      this.appendRouteTrack(this.routesGroup, routed.pathD, routed.line.color, opacity);
     }
 
     const stationMap = this.getStationMap();
@@ -739,7 +680,7 @@ export class MapRenderer {
     this.svg.setPointerCapture(pointerId);
     this.svg.style.cursor = "grabbing";
     this.drawPreview();
-    if (origin.mode === "insert") {
+    if (origin.mode !== "new") {
       this.drawRoutes();
     }
     this.redrawStations();
@@ -910,7 +851,7 @@ export class MapRenderer {
 
       this.drag = { ...this.drag, x: point.x, y: point.y, snapTargetId };
       this.drawPreview();
-      if (this.drag.origin.mode === "insert") {
+      if (this.drag.origin.mode !== "new") {
         this.drawRoutes();
       }
       if (snapTargetId !== previousSnap) {
@@ -1031,7 +972,7 @@ export class MapRenderer {
 
       this.game.advanceTime(dt);
       const worldUpdate = this.simulation.update(dt);
-      let trainPassengersChanged = false;
+      let trainUpdate = { passengersChanged: false, routeApplied: false };
 
       if (worldUpdate.stationsChanged) {
         const latest = this.game.getStations().at(-1);
@@ -1043,12 +984,18 @@ export class MapRenderer {
           this.redrawStations();
           this.refresh();
         }
-      } else if ((worldUpdate.passengersChanged || trainPassengersChanged) && !this.isInteracting()) {
+      } else if (
+        (worldUpdate.passengersChanged || trainUpdate.passengersChanged) &&
+        !this.isInteracting()
+      ) {
         this.drawPassengers();
       }
 
       if (this.bounce) {
         this.drawPreview();
+        if (this.bounce.origin.mode !== "new") {
+          this.drawRoutes();
+        }
         if (now - this.bounce.startTime >= BOUNCE_MS) {
           this.game.cancelDrag(this.bounce.origin);
           this.bounce = null;
@@ -1061,9 +1008,10 @@ export class MapRenderer {
         (line) => line.activeStationIds.length >= 2,
       );
       if (hasActiveRoutes) {
-        trainPassengersChanged = this.trainSimulation.update(dt, this.game);
+        trainUpdate = this.trainSimulation.update(dt, this.game);
         this.activeRoutedLines = this.buildRoutedLines("active");
         if (
+          trainUpdate.routeApplied ||
           this.game.getLines().some(
             (line) =>
               this.game.hasPendingRoute(line) ||

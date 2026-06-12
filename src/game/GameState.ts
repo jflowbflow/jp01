@@ -15,7 +15,6 @@ import {
 } from "./stationSpawner.ts";
 import {
   canApplyRouteChangeNow,
-  getApplyStationIds,
   pickJunctionForStationRemoval,
   remapTrainToPendingRoute,
 } from "./pendingRoute.ts";
@@ -382,17 +381,15 @@ export class GameState {
     line.pendingApplyStationId = undefined;
   }
 
-  applyPendingAtStation(
-    lineId: string,
-    stationId: string,
-    train?: Train,
-  ): boolean {
+  tryApplyPendingRoute(lineId: string, train?: Train): boolean {
     const line = this.getLine(lineId);
     if (!line || !this.hasPendingRoute(line)) return false;
-    if (!getApplyStationIds(line).includes(stationId)) return false;
+
+    const stationMap = this.getStationMap();
+    if (!canApplyRouteChangeNow(train, line, stationMap)) return false;
 
     if (train) {
-      remapTrainToPendingRoute(train, line, this.getStationMap());
+      remapTrainToPendingRoute(train, line, stationMap);
     }
 
     this.syncActiveRoute(line);
@@ -400,17 +397,7 @@ export class GameState {
   }
 
   finalizeRouteChange(lineId: string, train?: Train): void {
-    const line = this.getLine(lineId);
-    if (!line || !this.hasPendingRoute(line)) return;
-
-    const stationMap = this.getStationMap();
-    if (!canApplyRouteChangeNow(train, line, stationMap)) return;
-
-    if (train) {
-      remapTrainToPendingRoute(train, line, stationMap);
-    }
-
-    this.syncActiveRoute(line);
+    this.tryApplyPendingRoute(lineId, train);
   }
 
   private getStationMap(): Map<string, Station> {

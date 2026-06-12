@@ -40,8 +40,9 @@ export class TrainSimulation {
     return this.trains.has(lineId);
   }
 
-  update(dt: number, game: GameState): boolean {
+  update(dt: number, game: GameState): { passengersChanged: boolean; routeApplied: boolean } {
     let passengersChanged = false;
+    let routeApplied = false;
 
     for (const line of game.getLines()) {
       if (line.activeStationIds.length < 2) {
@@ -70,12 +71,10 @@ export class TrainSimulation {
       if (totalLength === 0) continue;
 
       const atStationId = getTrainAtStationOnLine(train, line, stationMap);
-      if (
-        atStationId &&
-        game.hasPendingRoute(line) &&
-        game.applyPendingAtStation(line.id, atStationId, train)
-      ) {
-        passengersChanged = true;
+      const stoppedAtStation = atStationId !== null || train.dwellRemaining > 0;
+
+      if (stoppedAtStation && game.tryApplyPendingRoute(line.id, train)) {
+        routeApplied = true;
         continue;
       }
 
@@ -99,8 +98,8 @@ export class TrainSimulation {
       if (crossed) {
         train.distance = crossed.distance;
         train.displayAngle = pathAngleAtLength(pathD, train.distance);
-        if (game.applyPendingAtStation(line.id, crossed.stationId, train)) {
-          passengersChanged = true;
+        if (game.tryApplyPendingRoute(line.id, train)) {
+          routeApplied = true;
         }
         if (this.handleStationStop(train, crossed.stationId, game, stationMap)) {
           passengersChanged = true;
@@ -125,7 +124,7 @@ export class TrainSimulation {
       train.displayAngle = pathAngleAtLength(pathD, train.distance);
     }
 
-    return passengersChanged;
+    return { passengersChanged, routeApplied };
   }
 
   getRenderStates(game: GameState): TrainRenderState[] {
