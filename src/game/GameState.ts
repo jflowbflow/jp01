@@ -21,12 +21,14 @@ import {
 import type { Passenger, PlayerLine, Station, StationShape, Train } from "../model/types.ts";
 
 export type DragMode = "extend" | "insert" | "new" | "unloop";
+export type ExtendEnd = "head" | "tail";
 
 export type DragOrigin = {
   lineId: string;
   fromStationId: string;
   addedOnDragStart: boolean;
   mode: DragMode;
+  extendEnd?: ExtendEnd;
   insertAfterIndex?: number;
 };
 
@@ -142,13 +144,15 @@ export class GameState {
     return this.lines.some((line) => line.stationIds.includes(stationId));
   }
 
+  private getExtendEnd(line: PlayerLine, stationId: string): ExtendEnd | null {
+    if (line.isLoop || line.stationIds.length === 0) return null;
+    if (line.stationIds[line.stationIds.length - 1] === stationId) return "tail";
+    if (line.stationIds[0] === stationId) return "head";
+    return null;
+  }
+
   getExtendableLinesAtStation(stationId: string): PlayerLine[] {
-    return this.lines.filter(
-      (line) =>
-        !line.isLoop &&
-        line.stationIds.length > 0 &&
-        line.stationIds[line.stationIds.length - 1] === stationId,
-    );
+    return this.lines.filter((line) => this.getExtendEnd(line, stationId) !== null);
   }
 
   getRemovableLinesAtStation(stationId: string): PlayerLine[] {
@@ -165,12 +169,16 @@ export class GameState {
       : undefined;
 
     if (extendable) {
+      const extendEnd = this.getExtendEnd(extendable, stationId);
+      if (!extendEnd) return null;
+
       this.activeLineId = extendable.id;
       return {
         lineId: extendable.id,
         fromStationId: stationId,
         addedOnDragStart: false,
         mode: "extend",
+        extendEnd,
       };
     }
 
@@ -179,12 +187,16 @@ export class GameState {
       if (candidates.length >= 1) {
         const preferred =
           candidates.find((line) => line.id === this.activeLineId) ?? candidates[0];
+        const extendEnd = this.getExtendEnd(preferred, stationId);
+        if (!extendEnd) return null;
+
         this.activeLineId = preferred.id;
         return {
           lineId: preferred.id,
           fromStationId: stationId,
           addedOnDragStart: false,
           mode: "extend",
+          extendEnd,
         };
       }
     }
@@ -258,6 +270,19 @@ export class GameState {
 
     const { stationIds } = line;
     if (stationIds.length === 0) return true;
+
+    const extendEnd = origin.extendEnd ?? "tail";
+    if (extendEnd === "head") {
+      if (stationIds[0] !== origin.fromStationId) return false;
+
+      const lastId = stationIds[stationIds.length - 1];
+      if (targetStationId === lastId) {
+        return stationIds.length >= 3;
+      }
+
+      return !stationIds.includes(targetStationId);
+    }
+
     if (stationIds[stationIds.length - 1] !== origin.fromStationId) return false;
 
     const firstId = stationIds[0];
@@ -276,6 +301,8 @@ export class GameState {
 
     if (origin.mode === "insert" && origin.insertAfterIndex !== undefined) {
       changed = this.insertStationAt(origin.lineId, origin.insertAfterIndex, targetStationId);
+    } else if (origin.mode === "extend" && origin.extendEnd === "head") {
+      changed = this.prependStation(targetStationId);
     } else {
       changed = this.addStation(targetStationId);
     }
@@ -323,6 +350,34 @@ export class GameState {
     line.isLoop = false;
     line.loopHandleStationId = undefined;
     this.queueRouteChange(lineId, junction);
+    return true;
+  }
+
+  prependStation(stationId: string): boolean {
+    const line = this.getActiveLine();
+    if (line.isLoop) return false;
+
+    const { stationIds } = line;
+    if (stationIds.length === 0) {
+      stationIds.push(stationId);
+      this.syncActiveRoute(line);
+      return true;
+    }
+
+    const firstId = stationIds[0];
+    if (stationId === firstId) return false;
+
+    const lastId = stationIds[stationIds.length - 1];
+    if (stationId === lastId) {
+      if (stationIds.length < 3) return false;
+      line.isLoop = true;
+      line.loopHandleStationId = firstId;
+      return true;
+    }
+
+    if (stationIds.includes(stationId)) return false;
+
+    stationIds.unshift(stationId);
     return true;
   }
 

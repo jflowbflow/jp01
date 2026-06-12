@@ -1,9 +1,10 @@
 import { MapRenderer } from "./render/MapRenderer.ts";
 
 const mapEl = document.querySelector<HTMLElement>("#map");
+const pickerEl = document.querySelector<HTMLElement>("#line-picker");
 
-if (!mapEl) {
-  throw new Error("Map container is missing.");
+if (!mapEl || !pickerEl) {
+  throw new Error("Map container elements are missing.");
 }
 
-new MapRenderer(mapEl);
+new MapRenderer(mapEl, pickerEl);

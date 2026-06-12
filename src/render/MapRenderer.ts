@@ -2,13 +2,13 @@ import { GameState, type DragOrigin } from "../game/GameState.ts";
 import { buildPendingSegments } from "../game/pendingRoute.ts";
 import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
-import { stationRadius } from "../game/stationSpawner.ts";
+import { mapScale, stationRadius } from "../game/stationSpawner.ts";
 import {
   pathTotalLength,
   routeOctilinear,
   routeOctilinearOpen,
 } from "../geometry/octilinearRouter.ts";
-import type { Passenger, Point, RoutedLine, Station } from "../model/types.ts";
+import type { Passenger, PlayerLine, Point, RoutedLine, Station } from "../model/types.ts";
 import { loopHandleGeometryForLine } from "./loopHandle.ts";
 import {
   createHitArea,
@@ -53,14 +53,14 @@ type PendingPointer = {
   segmentIndex?: number;
 };
 
-type PanState = {
-  pointerId: number;
-  lastClientX: number;
-  lastClientY: number;
+type RemovePicker = {
+  stationId: string;
+  lines: PlayerLine[];
 };
 
 export class MapRenderer {
   private readonly mapEl: HTMLElement;
+  private readonly pickerEl: HTMLElement;
   private readonly game = new GameState();
   private readonly simulation = new Simulation(this.game);
   private readonly trainSimulation = new TrainSimulation();
@@ -79,15 +79,16 @@ export class MapRenderer {
   private drag: DragState | null = null;
   private bounce: BounceState | null = null;
   private pendingPointer: PendingPointer | null = null;
-  private pan: PanState | null = null;
+  private removePicker: RemovePicker | null = null;
   private undoHoldStationId: string | null = null;
   private undoHoldProgress = 0;
   private hoveredStationId: string | null = null;
   private pendingStationRedraw = false;
   private stationShapeElements = new Map<string, SVGElement>();
 
-  constructor(mapEl: HTMLElement) {
+  constructor(mapEl: HTMLElement, pickerEl: HTMLElement) {
     this.mapEl = mapEl;
+    this.pickerEl = pickerEl;
     this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.svg.setAttribute("viewBox", "0 0 900 560");
     this.svg.setAttribute("role", "img");
@@ -142,6 +143,18 @@ export class MapRenderer {
     return stationRadius(this.game.getStations().length);
   }
 
+  private getMapScale(): number {
+    return mapScale(this.game.getStations().length);
+  }
+
+  private getLineWidth(): number {
+    return LINE_WIDTH * this.getMapScale();
+  }
+
+  private getRouteHitWidth(): number {
+    return ROUTE_HIT_WIDTH * this.getMapScale();
+  }
+
   private clientToWorld(clientX: number, clientY: number): Point {
     return this.viewport.clientToWorld(this.svg, clientX, clientY);
   }
@@ -164,7 +177,12 @@ export class MapRenderer {
   }
 
   private isInteracting(): boolean {
-    return this.drag !== null || this.bounce !== null || this.pendingPointer !== null;
+    return (
+      this.drag !== null ||
+      this.bounce !== null ||
+      this.pendingPointer !== null ||
+      this.removePicker !== null
+    );
   }
 
   private refresh(): void {
@@ -221,7 +239,7 @@ export class MapRenderer {
     track.setAttribute("d", pathD);
     track.setAttribute("fill", "none");
     track.setAttribute("stroke", color);
-    track.setAttribute("stroke-width", String(LINE_WIDTH));
+    track.setAttribute("stroke-width", String(this.getLineWidth()));
     track.setAttribute("stroke-linecap", "round");
     track.setAttribute("stroke-linejoin", "round");
     track.setAttribute("opacity", opacity);
@@ -310,7 +328,7 @@ export class MapRenderer {
         hit.setAttribute("d", pathD);
         hit.setAttribute("fill", "none");
         hit.setAttribute("stroke", "transparent");
-        hit.setAttribute("stroke-width", String(ROUTE_HIT_WIDTH));
+        hit.setAttribute("stroke-width", String(this.getRouteHitWidth()));
         hit.setAttribute("stroke-linecap", "round");
         hit.setAttribute("stroke-linejoin", "round");
         hit.style.cursor = "grab";
@@ -339,7 +357,7 @@ export class MapRenderer {
       stub.setAttribute("d", geometry.stubPath);
       stub.setAttribute("fill", "none");
       stub.setAttribute("stroke", line.color);
-      stub.setAttribute("stroke-width", String(LINE_WIDTH));
+      stub.setAttribute("stroke-width", String(this.getLineWidth()));
       stub.setAttribute("stroke-linecap", "round");
       stub.setAttribute("pointer-events", "none");
 
@@ -347,7 +365,7 @@ export class MapRenderer {
       hit.setAttribute("d", geometry.stubPath);
       hit.setAttribute("fill", "none");
       hit.setAttribute("stroke", "transparent");
-      hit.setAttribute("stroke-width", String(ROUTE_HIT_WIDTH));
+      hit.setAttribute("stroke-width", String(this.getRouteHitWidth()));
       hit.setAttribute("stroke-linecap", "round");
       hit.style.cursor = "grab";
       hit.dataset.loopHandle = line.id;
@@ -471,7 +489,7 @@ export class MapRenderer {
           passenger.destinationShape,
           station.x + offset.x,
           station.y + offset.y,
-          PASSENGER_SIZE,
+          PASSENGER_SIZE * this.getMapScale(),
           {
             fill: "#ffffff",
             stroke: "#1a1a1e",
@@ -488,7 +506,7 @@ export class MapRenderer {
   private drawTrains(): void {
     this.trainsGroup.replaceChildren();
 
-    for (const state of this.trainSimulation.getRenderStates(this.game)) {
+    for (const state of this.trainSimulation.getRenderStates(this.game, this.getMapScale())) {
       this.trainsGroup.append(createTrainElement(state));
     }
   }
@@ -593,7 +611,7 @@ export class MapRenderer {
       preview.setAttribute("d", pathD);
       preview.setAttribute("fill", "none");
       preview.setAttribute("stroke", lineColor);
-      preview.setAttribute("stroke-width", String(LINE_WIDTH));
+      preview.setAttribute("stroke-width", String(this.getLineWidth()));
       preview.setAttribute("stroke-linecap", "round");
       preview.setAttribute("stroke-linejoin", "round");
       preview.setAttribute("opacity", opacity);
@@ -700,17 +718,54 @@ export class MapRenderer {
     this.startDrag(origin, pointerId, point.x, point.y);
   }
 
+  private showRemovePicker(stationId: string, lines: PlayerLine[]): void {
+    this.removePicker = { stationId, lines };
+    this.pickerEl.hidden = false;
+    this.pickerEl.replaceChildren(
+      ...lines.map((line) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.style.background = line.color;
+        button.setAttribute("aria-label", `Remove from ${line.name}`);
+        button.addEventListener("click", () => this.pickRemoveLine(line.id));
+        return button;
+      }),
+    );
+  }
+
+  private hideRemovePicker(): void {
+    this.removePicker = null;
+    this.pickerEl.hidden = true;
+    this.pickerEl.replaceChildren();
+  }
+
+  private pickRemoveLine(lineId: string): void {
+    if (!this.removePicker) return;
+
+    const { stationId } = this.removePicker;
+    this.hideRemovePicker();
+    this.clearUndoHold();
+
+    if (this.game.removeStationFromLine(stationId, lineId)) {
+      this.afterRouteChange(lineId);
+      this.finishInteractionRefresh();
+    }
+  }
+
   private tryRemoveHold(stationId: string): void {
     const removable = this.game.getRemovableLinesAtStation(stationId);
     if (removable.length === 0) return;
 
     this.clearUndoHold();
 
-    const preferred =
-      removable.find((line) => line.id === this.game.getActiveLineId()) ?? removable[0];
+    if (removable.length > 1) {
+      this.showRemovePicker(stationId, removable);
+      this.redrawStations();
+      return;
+    }
 
-    if (this.game.removeStationFromLine(stationId, preferred.id)) {
-      this.afterRouteChange(preferred.id);
+    if (this.game.removeStationFromLine(stationId, removable[0].id)) {
+      this.afterRouteChange(removable[0].id);
       this.finishInteractionRefresh();
     }
   }
@@ -828,13 +883,7 @@ export class MapRenderer {
       return;
     }
 
-    this.pan = {
-      pointerId: event.pointerId,
-      lastClientX: event.clientX,
-      lastClientY: event.clientY,
-    };
-    this.svg.setPointerCapture(event.pointerId);
-    this.svg.style.cursor = "grabbing";
+    event.preventDefault();
   };
 
   private onPointerMove = (event: PointerEvent): void => {
@@ -861,21 +910,6 @@ export class MapRenderer {
       return;
     }
 
-    if (this.pan && event.pointerId === this.pan.pointerId) {
-      const dx = event.clientX - this.pan.lastClientX;
-      const dy = event.clientY - this.pan.lastClientY;
-      this.viewport.panByScreenDelta(
-        this.svg,
-        dx,
-        dy,
-        this.pan.lastClientX,
-        this.pan.lastClientY,
-      );
-      this.pan.lastClientX = event.clientX;
-      this.pan.lastClientY = event.clientY;
-      return;
-    }
-
     if (this.pendingPointer && event.pointerId === this.pendingPointer.pointerId) {
       this.processPendingPointer(event);
       return;
@@ -888,13 +922,6 @@ export class MapRenderer {
   };
 
   private onPointerUp = (event: PointerEvent): void => {
-    if (this.pan && event.pointerId === this.pan.pointerId) {
-      this.pan = null;
-      this.svg.style.cursor = "";
-      this.svg.releasePointerCapture(event.pointerId);
-      return;
-    }
-
     if (this.pendingPointer && event.pointerId === this.pendingPointer.pointerId) {
       this.pendingPointer = null;
       this.clearUndoHold();

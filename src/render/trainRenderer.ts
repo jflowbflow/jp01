@@ -19,9 +19,10 @@ export function createTrainElement(state: TrainRenderState): SVGGElement {
   const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
   group.setAttribute("pointer-events", "none");
 
+  const scale = state.scale;
   group.setAttribute(
     "transform",
-    `translate(${state.x} ${state.y}) rotate(${(state.angle * 180) / Math.PI})`,
+    `translate(${state.x} ${state.y}) rotate(${(state.angle * 180) / Math.PI}) scale(${scale})`,
   );
 
   const body = document.createElementNS("http://www.w3.org/2000/svg", "rect");

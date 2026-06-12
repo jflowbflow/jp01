@@ -49,11 +49,17 @@ const STATION_NAMES = [
   "Loop",
 ];
 
+const BASE_STATION_RADIUS = 20;
+const MIN_STATION_RADIUS = 5;
+const REFERENCE_STATION_RADIUS = 10;
+
 export function stationRadius(totalStations: number): number {
-  const max = 10;
-  const min = 4;
   const t = Math.min(1, Math.max(0, (totalStations - INITIAL_STATION_COUNT) / 22));
-  return max - (max - min) * t;
+  return BASE_STATION_RADIUS - (BASE_STATION_RADIUS - MIN_STATION_RADIUS) * t;
+}
+
+export function mapScale(totalStations: number): number {
+  return stationRadius(totalStations) / REFERENCE_STATION_RADIUS;
 }
 
 export function minStationDistance(totalStations: number): number {

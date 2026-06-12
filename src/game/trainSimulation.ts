@@ -14,6 +14,17 @@ import type { GameState } from "./GameState.ts";
 const DWELL_SECONDS = 0.55;
 const STATION_THRESHOLD = 10;
 const TRAIN_SPEED = 48;
+const TRAIN_TURN_RATE = 14;
+
+function lerpAngle(current: number, target: number, dt: number): number {
+  let delta = target - current;
+  while (delta > Math.PI) delta -= 2 * Math.PI;
+  while (delta < -Math.PI) delta += 2 * Math.PI;
+
+  const maxStep = TRAIN_TURN_RATE * dt;
+  if (Math.abs(delta) <= maxStep) return target;
+  return current + Math.sign(delta) * maxStep;
+}
 
 export type TrainRenderState = {
   train: Train;
@@ -21,6 +32,7 @@ export type TrainRenderState = {
   y: number;
   angle: number;
   color: string;
+  scale: number;
 };
 
 export class TrainSimulation {
@@ -75,6 +87,16 @@ export class TrainSimulation {
 
       if (stoppedAtStation && game.tryApplyPendingRoute(line.id, train)) {
         routeApplied = true;
+        const updatedRoute = game.getActiveRoute(line);
+        const updatedStations = updatedRoute.stationIds
+          .map((id) => stationMap.get(id))
+          .filter((station): station is Station => Boolean(station));
+        const updatedPathD = updatedRoute.isLoop
+          ? routeOctilinear(updatedStations)
+          : routeOctilinearOpen(updatedStations);
+        if (updatedPathD) {
+          train.displayAngle = pathAngleAtLength(updatedPathD, train.distance);
+        }
         continue;
       }
 
@@ -97,9 +119,24 @@ export class TrainSimulation {
 
       if (crossed) {
         train.distance = crossed.distance;
-        train.displayAngle = pathAngleAtLength(pathD, train.distance);
         if (game.tryApplyPendingRoute(line.id, train)) {
           routeApplied = true;
+          const updatedRoute = game.getActiveRoute(line);
+          const updatedStations = updatedRoute.stationIds
+            .map((id) => stationMap.get(id))
+            .filter((station): station is Station => Boolean(station));
+          const updatedPathD = updatedRoute.isLoop
+            ? routeOctilinear(updatedStations)
+            : routeOctilinearOpen(updatedStations);
+          if (updatedPathD) {
+            train.displayAngle = pathAngleAtLength(updatedPathD, train.distance);
+          }
+        } else {
+          train.displayAngle = lerpAngle(
+            train.displayAngle,
+            pathAngleAtLength(pathD, train.distance),
+            dt,
+          );
         }
         if (this.handleStationStop(train, crossed.stationId, game, stationMap)) {
           passengersChanged = true;
@@ -121,13 +158,17 @@ export class TrainSimulation {
         train.distance = nextDistance;
       }
 
-      train.displayAngle = pathAngleAtLength(pathD, train.distance);
+      train.displayAngle = lerpAngle(
+        train.displayAngle,
+        pathAngleAtLength(pathD, train.distance),
+        dt,
+      );
     }
 
     return { passengersChanged, routeApplied };
   }
 
-  getRenderStates(game: GameState): TrainRenderState[] {
+  getRenderStates(game: GameState, scale: number): TrainRenderState[] {
     const states: TrainRenderState[] = [];
     const stationMap = new Map(game.getStations().map((s) => [s.id, s]));
 
@@ -155,6 +196,7 @@ export class TrainSimulation {
         y: point.y,
         angle: train.displayAngle,
         color: line.color,
+        scale,
       });
     }
 
