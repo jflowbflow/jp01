@@ -196,6 +196,24 @@ export class MapRenderer {
     this.drawPreview();
   }
 
+  private getDisplayRoute(line: PlayerLine): {
+    stationIds: string[];
+    isLoop: boolean;
+    loopHandleStationId?: string;
+  } {
+    const active = this.game.getActiveRoute(line);
+    if (
+      this.game.hasPendingRoute(line) &&
+      line.isLoop !== line.activeIsLoop
+    ) {
+      return {
+        ...active,
+        isLoop: line.isLoop,
+      };
+    }
+    return active;
+  }
+
   private buildRoutedLines(kind: "active" | "pending"): RoutedLine[] {
     const stationMap = this.getStationMap();
 
@@ -203,10 +221,12 @@ export class MapRenderer {
       if (kind === "pending" && !this.game.hasPendingRoute(line)) return [];
 
       const route =
-        kind === "active" ? this.game.getActiveRoute(line) : {
-          stationIds: line.stationIds,
-          isLoop: line.isLoop,
-        };
+        kind === "active"
+          ? this.getDisplayRoute(line)
+          : {
+              stationIds: line.stationIds,
+              isLoop: line.isLoop,
+            };
 
       const lineStations = route.stationIds
         .map((id) => stationMap.get(id))
@@ -267,13 +287,12 @@ export class MapRenderer {
     return `${fromId}>${toId}`;
   }
 
-  private drawActiveRouteSegments(
+  private drawRouteSegments(
     parent: SVGGElement,
-    line: PlayerLine,
+    route: { stationIds: string[]; isLoop: boolean },
     color: string,
     fadedSegmentKeys: Set<string>,
   ): void {
-    const route = this.game.getActiveRoute(line);
     const stationMap = this.getStationMap();
     const segmentCount = route.isLoop
       ? route.stationIds.length
@@ -303,6 +322,15 @@ export class MapRenderer {
     }
   }
 
+  private drawActiveRouteSegments(
+    parent: SVGGElement,
+    line: PlayerLine,
+    color: string,
+    fadedSegmentKeys: Set<string>,
+  ): void {
+    this.drawRouteSegments(parent, this.game.getActiveRoute(line), color, fadedSegmentKeys);
+  }
+
   private getDraggingSegment():
     | { lineId: string; fromId: string; toId: string }
     | null {
@@ -320,15 +348,14 @@ export class MapRenderer {
     const line = this.game.getLine(origin.lineId);
     if (!line) return null;
 
-    const route = this.game.getActiveRoute(line);
-    const fromId = route.stationIds[origin.insertAfterIndex];
+    const fromId = line.stationIds[origin.insertAfterIndex];
     if (!fromId) return null;
 
     let toId: string | undefined;
-    if (origin.insertAfterIndex < route.stationIds.length - 1) {
-      toId = route.stationIds[origin.insertAfterIndex + 1];
-    } else if (route.isLoop) {
-      toId = route.stationIds[0];
+    if (origin.insertAfterIndex < line.stationIds.length - 1) {
+      toId = line.stationIds[origin.insertAfterIndex + 1];
+    } else if (line.isLoop) {
+      toId = line.stationIds[0];
     }
 
     if (!toId) return null;
@@ -352,6 +379,10 @@ export class MapRenderer {
       this.drag?.origin.mode === "insert" ||
       this.bounce?.origin.mode === "insert"
     );
+  }
+
+  private shouldRedrawRoutesForSegmentDrag(): boolean {
+    return this.isSegmentDragActive() && this.isTrainOnDraggingSegment();
   }
 
   private drawRoutes(): void {
@@ -386,7 +417,12 @@ export class MapRenderer {
         const fadedKeys = new Set([
           this.segmentDirectedKey(draggingSegment.fromId, draggingSegment.toId),
         ]);
-        this.drawActiveRouteSegments(this.routesGroup, line, line.color, fadedKeys);
+        this.drawRouteSegments(
+          this.routesGroup,
+          this.getDisplayRoute(line),
+          line.color,
+          fadedKeys,
+        );
         continue;
       }
 
@@ -1128,11 +1164,17 @@ export class MapRenderer {
         this.drawPassengers();
       }
 
-      if (this.bounce && now - this.bounce.startTime >= BOUNCE_MS) {
-        this.game.cancelDrag(this.bounce.origin);
-        this.bounce = null;
-        this.previewGroup.replaceChildren();
-        this.finishInteractionRefresh();
+      if (this.bounce) {
+        this.drawPreview();
+        if (this.bounce.origin.mode === "insert" && this.isTrainOnDraggingSegment()) {
+          this.drawRoutes();
+        }
+        if (now - this.bounce.startTime >= BOUNCE_MS) {
+          this.game.cancelDrag(this.bounce.origin);
+          this.bounce = null;
+          this.previewGroup.replaceChildren();
+          this.finishInteractionRefresh();
+        }
       }
 
       const hasActiveRoutes = this.game.getLines().some(
@@ -1144,15 +1186,11 @@ export class MapRenderer {
         if (
           trainUpdate.routeApplied ||
           this.game.getLines().some((line) => this.game.hasPendingRoute(line)) ||
-          this.isSegmentDragActive()
+          this.shouldRedrawRoutesForSegmentDrag()
         ) {
           this.drawRoutes();
         }
         this.drawTrains();
-      }
-
-      if (this.bounce) {
-        this.drawPreview();
       }
 
       this.animationFrame = requestAnimationFrame(tick);

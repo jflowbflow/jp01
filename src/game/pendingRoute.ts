@@ -166,6 +166,8 @@ function distanceOnSegment(
   to: number,
   isLoop: boolean,
 ): boolean {
+  if (!isLoop && from > to) return false;
+
   const low = Math.min(from, to) - SEGMENT_MARGIN;
   const high = Math.max(from, to) + SEGMENT_MARGIN;
 
@@ -210,6 +212,13 @@ function trainOnRouteSegmentStops(
   };
 }
 
+function isActiveRouteSegment(line: PlayerLine, segment: RouteSegment): boolean {
+  return listRouteSegments(line.activeStationIds, line.activeIsLoop).some(
+    (activeSegment) =>
+      activeSegment.fromId === segment.fromId && activeSegment.toId === segment.toId,
+  );
+}
+
 /** Includes trains dwelling at either endpoint — used for drag-time ghost visuals. */
 export function isTrainOccupyingSegment(
   train: Train,
@@ -217,6 +226,8 @@ export function isTrainOccupyingSegment(
   stationMap: Map<string, Station>,
   segment: RouteSegment,
 ): boolean {
+  if (!isActiveRouteSegment(line, segment)) return false;
+
   const placement = trainOnRouteSegmentStops(train, line, stationMap, segment);
   if (!placement) return false;
 
