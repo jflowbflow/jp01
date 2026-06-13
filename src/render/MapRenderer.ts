@@ -1,11 +1,10 @@
 import { GameState, type DragOrigin } from "../game/GameState.ts";
-import { buildPendingSegments, diffRemovedActiveSegments, isTrainOccupyingSegment, isTrainOnAffectedSegments } from "../game/pendingRoute.ts";
+import { buildPendingSegments, diffRemovedActiveSegments, isClosedLoopRoute, isTrainOccupyingSegment, isTrainOnAffectedSegments, routePathForStations } from "../game/pendingRoute.ts";
 import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
 import { mapScale, stationRadius } from "../game/stationSpawner.ts";
 import {
   pathTotalLength,
-  routeOctilinear,
   routeOctilinearOpen,
 } from "../geometry/octilinearRouter.ts";
 import type { Passenger, PlayerLine, Point, RoutedLine, Station } from "../model/types.ts";
@@ -204,7 +203,7 @@ export class MapRenderer {
     if (line.stationIds.length >= 2) {
       return {
         stationIds: line.stationIds,
-        isLoop: line.isLoop,
+        isLoop: isClosedLoopRoute(line.stationIds, line.isLoop),
         loopHandleStationId: line.loopHandleStationId,
       };
     }
@@ -223,7 +222,7 @@ export class MapRenderer {
           ? this.getDisplayRoute(line)
           : {
               stationIds: line.stationIds,
-              isLoop: line.isLoop,
+              isLoop: isClosedLoopRoute(line.stationIds, line.isLoop),
             };
 
       const lineStations = route.stationIds
@@ -232,9 +231,7 @@ export class MapRenderer {
 
       if (lineStations.length < 2) return [];
 
-      const pathD = route.isLoop
-        ? routeOctilinear(lineStations)
-        : routeOctilinearOpen(lineStations);
+      const pathD = routePathForStations(lineStations, route.isLoop);
 
       if (!pathD) return [];
 
@@ -275,7 +272,7 @@ export class MapRenderer {
     if (segmentIndex < line.stationIds.length - 1) {
       return stationMap.get(line.stationIds[segmentIndex + 1]);
     }
-    if (line.isLoop) {
+    if (isClosedLoopRoute(line.stationIds, line.isLoop)) {
       return stationMap.get(line.stationIds[0]);
     }
     return undefined;
@@ -292,7 +289,8 @@ export class MapRenderer {
     fadedSegmentKeys: Set<string>,
   ): void {
     const stationMap = this.getStationMap();
-    const segmentCount = route.isLoop
+    const closed = isClosedLoopRoute(route.stationIds, route.isLoop);
+    const segmentCount = closed
       ? route.stationIds.length
       : route.stationIds.length - 1;
 
@@ -352,7 +350,7 @@ export class MapRenderer {
     let toId: string | undefined;
     if (origin.insertAfterIndex < line.stationIds.length - 1) {
       toId = line.stationIds[origin.insertAfterIndex + 1];
-    } else if (line.isLoop) {
+    } else if (isClosedLoopRoute(line.stationIds, line.isLoop)) {
       toId = line.stationIds[0];
     }
 
@@ -447,7 +445,8 @@ export class MapRenderer {
     for (const line of this.game.getLines()) {
       if (line.stationIds.length < 2) continue;
 
-      const segmentCount = line.isLoop
+      const closed = isClosedLoopRoute(line.stationIds, line.isLoop);
+      const segmentCount = closed
         ? line.stationIds.length
         : line.stationIds.length - 1;
 
@@ -485,7 +484,7 @@ export class MapRenderer {
     const stationMap = this.getStationMap();
 
     for (const line of this.game.getLines()) {
-      if (!line.isLoop || !line.loopHandleStationId) continue;
+      if (!isClosedLoopRoute(line.stationIds, line.isLoop) || !line.loopHandleStationId) continue;
 
       const geometry = loopHandleGeometryForLine(
         line.stationIds,
@@ -794,7 +793,7 @@ export class MapRenderer {
       return;
     }
 
-    if (origin.mode === "insert" || line.isLoop) {
+    if (origin.mode === "insert" || isClosedLoopRoute(line.stationIds, line.isLoop)) {
       this.drag = null;
       this.finishInteractionRefresh();
       return;

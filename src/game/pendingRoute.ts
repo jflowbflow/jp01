@@ -15,6 +15,24 @@ export type PendingSegment = {
 
 const SEGMENT_MARGIN = 6;
 const STATION_AT_THRESHOLD = 10;
+const MIN_LOOP_STATIONS = 3;
+
+export function isClosedLoopRoute(
+  stationIds: readonly string[],
+  isLoop: boolean,
+): boolean {
+  return isLoop && stationIds.length >= MIN_LOOP_STATIONS;
+}
+
+export function routePathForStations(
+  stations: readonly { x: number; y: number }[],
+  isLoop: boolean,
+): string {
+  if (stations.length < 2) return "";
+  return isLoop && stations.length >= MIN_LOOP_STATIONS
+    ? routeOctilinear([...stations])
+    : routeOctilinearOpen([...stations]);
+}
 
 function directedKey(fromId: string, toId: string): string {
   return `${fromId}>${toId}`;
@@ -31,7 +49,7 @@ export function listRouteSegments(
     segments.push({ fromId: stationIds[index], toId: stationIds[index + 1] });
   }
 
-  if (isLoop && stationIds.length >= 3) {
+  if (isClosedLoopRoute(stationIds, isLoop)) {
     segments.push({
       fromId: stationIds[stationIds.length - 1],
       toId: stationIds[0],
@@ -151,9 +169,7 @@ export function getTrainAtStationOnLine(
     .map((id) => stationMap.get(id))
     .filter((station): station is Station => Boolean(station));
 
-  const pathD = line.activeIsLoop
-    ? routeOctilinear(activeStations)
-    : routeOctilinearOpen(activeStations);
+  const pathD = routePathForStations(activeStations, line.activeIsLoop);
 
   if (!pathD) return null;
 
@@ -194,9 +210,7 @@ function trainOnRouteSegmentStops(
     .map((id) => stationMap.get(id))
     .filter((station): station is Station => Boolean(station));
 
-  const pathD = line.activeIsLoop
-    ? routeOctilinear(activeStations)
-    : routeOctilinearOpen(activeStations);
+  const pathD = routePathForStations(activeStations, line.activeIsLoop);
 
   if (!pathD || pathTotalLength(pathD) === 0) return null;
 
@@ -240,7 +254,7 @@ export function isTrainOccupyingSegment(
     train.distance,
     fromStop.distance,
     toStop.distance,
-    line.activeIsLoop,
+    isClosedLoopRoute(line.activeStationIds, line.activeIsLoop),
   );
 }
 
@@ -262,7 +276,7 @@ export function isTrainOnRouteSegment(
     train.distance,
     fromStop.distance,
     toStop.distance,
-    line.activeIsLoop,
+    isClosedLoopRoute(line.activeStationIds, line.activeIsLoop),
   );
 }
 
@@ -332,9 +346,7 @@ export function remapTrainToPendingRoute(
   const activeStations = line.activeStationIds
     .map((id) => stationMap.get(id))
     .filter((station): station is Station => Boolean(station));
-  const oldPathD = line.activeIsLoop
-    ? routeOctilinear(activeStations)
-    : routeOctilinearOpen(activeStations);
+  const oldPathD = routePathForStations(activeStations, line.activeIsLoop);
 
   if (!oldPathD) return;
 
@@ -342,9 +354,7 @@ export function remapTrainToPendingRoute(
   const pendingStations = line.stationIds
     .map((id) => stationMap.get(id))
     .filter((station): station is Station => Boolean(station));
-  const newPathD = line.isLoop
-    ? routeOctilinear(pendingStations)
-    : routeOctilinearOpen(pendingStations);
+  const newPathD = routePathForStations(pendingStations, line.isLoop);
 
   if (!newPathD) return;
 
