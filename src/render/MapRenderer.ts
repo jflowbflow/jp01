@@ -1,5 +1,5 @@
 import { GameState, type DragOrigin } from "../game/GameState.ts";
-import { buildPendingSegments } from "../game/pendingRoute.ts";
+import { buildPendingSegments, diffRemovedActiveSegments, isTrainOnAffectedSegments } from "../game/pendingRoute.ts";
 import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
 import { mapScale, stationRadius } from "../game/stationSpawner.ts";
@@ -22,8 +22,7 @@ const LINE_WIDTH = 7;
 const ROUTE_HIT_WIDTH = 22;
 const PASSENGER_SIZE = 4.5;
 const PENDING_ROUTE_OPACITY = 0.32;
-const DRAG_GHOST_OPACITY = 0.38;
-const DRAG_GHOST_SNAP_OPACITY = 0.62;
+const PREVIEW_DASH = "10 8";
 const BOUNCE_MS = 220;
 const DRAG_START_PX = 5;
 const UNDO_HOLD_MS = 480;
@@ -263,53 +262,28 @@ export class MapRenderer {
     return undefined;
   }
 
-  private getInsertGhostSegment():
-    | { lineId: string; fromId: string; toId: string }
-    | null {
-    const origin =
-      this.drag?.origin.mode === "insert"
-        ? this.drag.origin
-        : this.bounce?.origin.mode === "insert"
-          ? this.bounce.origin
-          : undefined;
-
-    if (!origin || origin.insertAfterIndex === undefined) {
-      return null;
-    }
-
-    const line = this.game.getLine(origin.lineId);
-    if (!line) return null;
-
-    const route = this.game.getActiveRoute(line);
-    const fromId = route.stationIds[origin.insertAfterIndex];
-    if (!fromId) return null;
-
-    let toId: string | undefined;
-    if (origin.insertAfterIndex < route.stationIds.length - 1) {
-      toId = route.stationIds[origin.insertAfterIndex + 1];
-    } else if (route.isLoop) {
-      toId = route.stationIds[0];
-    }
-
-    if (!toId) return null;
-
-    return { lineId: line.id, fromId, toId };
+  private segmentDirectedKey(fromId: string, toId: string): string {
+    return `${fromId}>${toId}`;
   }
 
-  private drawRouteSegments(
+  private drawActiveRouteSegments(
     parent: SVGGElement,
-    stationIds: string[],
-    isLoop: boolean,
+    line: PlayerLine,
     color: string,
-    ghostSegment?: { fromId: string; toId: string },
+    fadedSegmentKeys: Set<string>,
   ): void {
+    const route = this.game.getActiveRoute(line);
     const stationMap = this.getStationMap();
-    const segmentCount = isLoop ? stationIds.length : stationIds.length - 1;
+    const segmentCount = route.isLoop
+      ? route.stationIds.length
+      : route.stationIds.length - 1;
 
     for (let index = 0; index < segmentCount; index += 1) {
-      const fromId = stationIds[index];
+      const fromId = route.stationIds[index];
       const toId =
-        index < stationIds.length - 1 ? stationIds[index + 1] : stationIds[0];
+        index < route.stationIds.length - 1
+          ? route.stationIds[index + 1]
+          : route.stationIds[0];
 
       const from = stationMap.get(fromId);
       const to = stationMap.get(toId);
@@ -318,52 +292,47 @@ export class MapRenderer {
       const pathD = routeOctilinearOpen([from, to]);
       if (!pathD) continue;
 
-      const isGhost =
-        ghostSegment !== undefined &&
-        fromId === ghostSegment.fromId &&
-        toId === ghostSegment.toId;
-
+      const faded = fadedSegmentKeys.has(this.segmentDirectedKey(fromId, toId));
       this.appendRouteTrack(
         parent,
         pathD,
         color,
-        isGhost ? String(DRAG_GHOST_OPACITY) : "0.95",
+        faded ? String(PENDING_ROUTE_OPACITY) : "0.95",
       );
     }
   }
 
   private drawRoutes(): void {
     this.routesGroup.replaceChildren();
-    const insertGhost = this.getInsertGhostSegment();
+    const stationMap = this.getStationMap();
 
     for (const routed of this.activeRoutedLines) {
-      if (insertGhost && insertGhost.lineId === routed.line.id) {
-        const route = this.game.getActiveRoute(routed.line);
-        this.drawRouteSegments(
-          this.routesGroup,
-          route.stationIds,
-          route.isLoop,
-          routed.line.color,
-          insertGhost,
+      const line = routed.line;
+      const train = this.trainSimulation.getTrain(line.id);
+      const fadeOldSegments =
+        train !== undefined &&
+        this.game.hasPendingRoute(line) &&
+        isTrainOnAffectedSegments(train, line, stationMap);
+
+      if (fadeOldSegments) {
+        const fadedKeys = new Set(
+          diffRemovedActiveSegments(line).map((segment) =>
+            this.segmentDirectedKey(segment.fromId, segment.toId),
+          ),
         );
+        this.drawActiveRouteSegments(this.routesGroup, line, line.color, fadedKeys);
         continue;
       }
 
       this.appendRouteTrack(this.routesGroup, routed.pathD, routed.line.color, "0.95");
     }
 
-    const stationMap = this.getStationMap();
-
     for (const line of this.game.getLines()) {
-      if (!this.trainSimulation.shouldShowPendingFade(line.id, this.game)) continue;
+      if (!this.game.hasPendingRoute(line)) continue;
+      if (!this.trainSimulation.getTrain(line.id)) continue;
 
       for (const segment of buildPendingSegments(line, stationMap)) {
-        this.appendRouteTrack(
-          this.routesGroup,
-          segment.pathD,
-          line.color,
-          String(PENDING_ROUTE_OPACITY),
-        );
+        this.appendRouteTrack(this.routesGroup, segment.pathD, line.color, "0.95");
       }
     }
   }
@@ -586,7 +555,7 @@ export class MapRenderer {
     const stationMap = this.getStationMap();
     let lineColor = this.game.getActiveLine().color;
     const legs: [Point, Point][] = [];
-    let opacity = DRAG_GHOST_OPACITY;
+    let dashed = false;
 
     const drag = this.drag;
     const bounce = this.bounce;
@@ -596,9 +565,7 @@ export class MapRenderer {
       if (!line) return;
 
       lineColor = line.color;
-      if (drag.snapTargetId) {
-        opacity = DRAG_GHOST_SNAP_OPACITY;
-      }
+      dashed = !drag.snapTargetId;
 
       if (drag.origin.mode === "insert" && drag.origin.insertAfterIndex !== undefined) {
         const fromStation = stationMap.get(drag.origin.fromStationId);
@@ -640,7 +607,6 @@ export class MapRenderer {
       if (!line) return;
 
       lineColor = line.color;
-      opacity = DRAG_GHOST_OPACITY * 0.85;
 
       const elapsed = performance.now() - bounce.startTime;
       const t = Math.min(1, elapsed / BOUNCE_MS);
@@ -684,7 +650,10 @@ export class MapRenderer {
       preview.setAttribute("stroke-width", String(this.getLineWidth()));
       preview.setAttribute("stroke-linecap", "round");
       preview.setAttribute("stroke-linejoin", "round");
-      preview.setAttribute("opacity", String(opacity));
+      preview.setAttribute("opacity", "0.95");
+      if (dashed) {
+        preview.setAttribute("stroke-dasharray", PREVIEW_DASH);
+      }
       preview.setAttribute("pointer-events", "none");
       this.previewGroup.append(preview);
     }
@@ -767,9 +736,6 @@ export class MapRenderer {
     this.svg.setPointerCapture(pointerId);
     this.svg.style.cursor = "grabbing";
     this.drawPreview();
-    if (origin.mode === "insert") {
-      this.drawRoutes();
-    }
     this.redrawStations();
   }
 
@@ -969,9 +935,6 @@ export class MapRenderer {
 
       this.drag = { ...this.drag, x: point.x, y: point.y, snapTargetId };
       this.drawPreview();
-      if (this.drag.origin.mode === "insert") {
-        this.drawRoutes();
-      }
       if (snapTargetId !== previousSnap) {
         this.redrawStations();
         if (snapTargetId) this.tryAutoAnchor();
@@ -1089,9 +1052,6 @@ export class MapRenderer {
 
       if (this.bounce) {
         this.drawPreview();
-        if (this.bounce.origin.mode === "insert") {
-          this.drawRoutes();
-        }
         if (now - this.bounce.startTime >= BOUNCE_MS) {
           this.game.cancelDrag(this.bounce.origin);
           this.bounce = null;
@@ -1108,11 +1068,7 @@ export class MapRenderer {
         this.activeRoutedLines = this.buildRoutedLines("active");
         if (
           trainUpdate.routeApplied ||
-          this.game.getLines().some(
-            (line) =>
-              this.game.hasPendingRoute(line) ||
-              this.trainSimulation.shouldShowPendingFade(line.id, this.game),
-          )
+          this.game.getLines().some((line) => this.game.hasPendingRoute(line))
         ) {
           this.drawRoutes();
         }
