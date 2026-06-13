@@ -319,6 +319,25 @@ export class GameState {
     return !stationIds.includes(targetStationId);
   }
 
+  /** True when connecting would close an open line into a loop (tail→head or head→tail). */
+  wouldCloseLoopOnConnect(origin: DragOrigin, targetStationId: string): boolean {
+    if (origin.mode === "insert" || origin.mode === "unloop" || origin.mode === "new") {
+      return false;
+    }
+
+    const line = this.getLine(origin.lineId);
+    if (!line || isClosedLoopRoute(line.stationIds, line.isLoop)) return false;
+
+    const { stationIds } = line;
+    if (stationIds.length < 3) return false;
+
+    const extendEnd = origin.extendEnd ?? "tail";
+    if (extendEnd === "head") {
+      return targetStationId === stationIds[stationIds.length - 1];
+    }
+    return targetStationId === stationIds[0];
+  }
+
   connectDragTarget(origin: DragOrigin, targetStationId: string): boolean {
     if (!this.canConnectDragTarget(origin, targetStationId)) return false;
 

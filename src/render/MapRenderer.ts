@@ -400,6 +400,56 @@ export class MapRenderer {
     return undefined;
   }
 
+  /** Full route path with the dragged segment rerouted through the hinge. */
+  private buildInsertDragRoutePoints(
+    line: PlayerLine,
+    insertAfterIndex: number,
+    hinge: Point,
+    stationMap: Map<string, Station>,
+  ): Point[] {
+    const points: Point[] = [];
+    for (let index = 0; index <= insertAfterIndex; index += 1) {
+      const station = stationMap.get(line.stationIds[index]);
+      if (station) points.push(station);
+    }
+    points.push(hinge);
+
+    for (let index = insertAfterIndex + 1; index < line.stationIds.length; index += 1) {
+      const station = stationMap.get(line.stationIds[index]);
+      if (station) points.push(station);
+    }
+
+    const endStation = this.getInsertSegmentEndStation(line, insertAfterIndex, stationMap);
+    if (endStation) {
+      const last = points[points.length - 1];
+      if (!last || last.x !== endStation.x || last.y !== endStation.y) {
+        points.push(endStation);
+      }
+    }
+
+    return points;
+  }
+
+  private appendPreviewPath(
+    pathD: string,
+    color: string,
+    dashed: boolean,
+  ): void {
+    const preview = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    preview.setAttribute("d", pathD);
+    preview.setAttribute("fill", "none");
+    preview.setAttribute("stroke", color);
+    preview.setAttribute("stroke-width", String(this.getLineWidth()));
+    preview.setAttribute("stroke-linecap", "round");
+    preview.setAttribute("stroke-linejoin", "round");
+    preview.setAttribute("opacity", "0.95");
+    if (dashed) {
+      preview.setAttribute("stroke-dasharray", PREVIEW_DASH);
+    }
+    preview.setAttribute("pointer-events", "none");
+    this.previewGroup.append(preview);
+  }
+
   private segmentDirectedKey(fromId: string, toId: string): string {
     return `${fromId}>${toId}`;
   }
@@ -535,19 +585,19 @@ export class MapRenderer {
       }
 
       if (segmentDragActive && draggingSegment && draggingSegment.lineId === line.id) {
-        const draggedKey = this.segmentDirectedKey(
-          draggingSegment.fromId,
-          draggingSegment.toId,
-        );
-        const fadedKeys = fadeDraggedSegment ? new Set([draggedKey]) : new Set<string>();
-        const omittedKeys = fadeDraggedSegment ? new Set<string>() : new Set([draggedKey]);
-        this.drawRouteSegments(
-          this.routesGroup,
-          this.getDisplayRoute(line),
-          line.color,
-          fadedKeys,
-          omittedKeys,
-        );
+        if (fadeDraggedSegment) {
+          const draggedKey = this.segmentDirectedKey(
+            draggingSegment.fromId,
+            draggingSegment.toId,
+          );
+          this.drawRouteSegments(
+            this.routesGroup,
+            this.getDisplayRoute(line),
+            line.color,
+            new Set([draggedKey]),
+            new Set(),
+          );
+        }
         continue;
       }
 
@@ -889,6 +939,20 @@ export class MapRenderer {
           ? (stationMap.get(drag.snapTargetId) ?? { x: drag.x, y: drag.y })
           : { x: drag.x, y: drag.y };
 
+        if (!this.isTrainOnDraggingSegment()) {
+          const routePoints = this.buildInsertDragRoutePoints(
+            line,
+            drag.origin.insertAfterIndex,
+            hinge,
+            stationMap,
+          );
+          const pathD = routeOctilinearOpen(routePoints);
+          if (pathD) {
+            this.appendPreviewPath(pathD, lineColor, dashed);
+            return;
+          }
+        }
+
         legs.push([fromStation, hinge], [hinge, toStation]);
       } else {
         let fromPoint: Point | undefined;
@@ -963,20 +1027,7 @@ export class MapRenderer {
     for (const [fromPoint, endPoint] of legs) {
       const pathD = routeOctilinearOpen([fromPoint, endPoint]);
       if (!pathD) continue;
-
-      const preview = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      preview.setAttribute("d", pathD);
-      preview.setAttribute("fill", "none");
-      preview.setAttribute("stroke", lineColor);
-      preview.setAttribute("stroke-width", String(this.getLineWidth()));
-      preview.setAttribute("stroke-linecap", "round");
-      preview.setAttribute("stroke-linejoin", "round");
-      preview.setAttribute("opacity", "0.95");
-      if (dashed) {
-        preview.setAttribute("stroke-dasharray", PREVIEW_DASH);
-      }
-      preview.setAttribute("pointer-events", "none");
-      this.previewGroup.append(preview);
+      this.appendPreviewPath(pathD, lineColor, dashed);
     }
   }
 
@@ -1000,6 +1051,8 @@ export class MapRenderer {
     if (!this.canAutoAnchorAt(this.drag.snapTargetId)) return;
 
     const { origin, snapTargetId, pointerId } = this.drag;
+
+    if (this.game.wouldCloseLoopOnConnect(origin, snapTargetId)) return;
 
     if (!this.game.connectDragTarget(origin, snapTargetId)) return;
 
