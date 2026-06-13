@@ -918,6 +918,10 @@ export class MapRenderer {
     if (!this.drag?.snapTargetId) return;
 
     const { origin, snapTargetId, pointerId } = this.drag;
+    const lineBefore = this.game.getLine(origin.lineId);
+    const completesFirstSegment =
+      origin.mode === "new" || (lineBefore?.stationIds.length ?? 0) === 1;
+
     if (!this.game.connectDragTarget(origin, snapTargetId)) return;
 
     this.afterRouteChange(origin.lineId);
@@ -931,7 +935,11 @@ export class MapRenderer {
       return;
     }
 
-    if (origin.mode === "insert" || isClosedLoopRoute(line.stationIds, line.isLoop)) {
+    if (
+      origin.mode === "insert" ||
+      isClosedLoopRoute(line.stationIds, line.isLoop) ||
+      completesFirstSegment
+    ) {
       this.drag = null;
       this.finishInteractionRefresh();
       return;
