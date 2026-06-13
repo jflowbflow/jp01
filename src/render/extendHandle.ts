@@ -80,3 +80,21 @@ export function endpointCapAtPoint(
   if (along <= len && along >= len - capAlong) return "to";
   return null;
 }
+
+/**
+ * True when the cursor is on the inward side of an open-line endpoint (back toward
+ * the existing route). Mini Metro never previews a leg folded back along the line.
+ */
+export function isBackwardExtensionCursor(
+  endpoint: Point,
+  neighbor: Point,
+  cursor: Point,
+): boolean {
+  const inDx = endpoint.x - neighbor.x;
+  const inDy = endpoint.y - neighbor.y;
+  const outDx = cursor.x - endpoint.x;
+  const outDy = cursor.y - endpoint.y;
+  const inLen = Math.hypot(inDx, inDy);
+  if (inLen < 1) return false;
+  return inDx * outDx + inDy * outDy <= 0;
+}

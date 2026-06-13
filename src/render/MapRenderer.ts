@@ -9,7 +9,12 @@ import {
 } from "../geometry/octilinearRouter.ts";
 import type { Passenger, PlayerLine, Point, RoutedLine, Station } from "../model/types.ts";
 import { loopHandleGeometryForLine } from "./loopHandle.ts";
-import { computeExtendHandle, endpointCapAtPoint, trimSegmentHitEndpoints } from "./extendHandle.ts";
+import {
+  computeExtendHandle,
+  endpointCapAtPoint,
+  isBackwardExtensionCursor,
+  trimSegmentHitEndpoints,
+} from "./extendHandle.ts";
 import {
   createHitArea,
   createStationShape,
@@ -27,6 +32,8 @@ const BOUNCE_MS = 220;
 const DRAG_START_PX = 5;
 const HOLD_CANCEL_PX = 22;
 const UNDO_HOLD_MS = 480;
+/** Must be within this distance of a station center before hover-snap commits. */
+const AUTO_ANCHOR_RADIUS_PX = 8;
 
 type DragState = {
   origin: DragOrigin;
@@ -233,6 +240,43 @@ export class MapRenderer {
     }
 
     return closest;
+  }
+
+  private getAutoAnchorRadius(): number {
+    return this.getBaseRadius() + AUTO_ANCHOR_RADIUS_PX * this.getMapScale();
+  }
+
+  private canAutoAnchorAt(snapTargetId: string): boolean {
+    if (!this.drag) return false;
+    const station = this.getStationMap().get(snapTargetId);
+    if (!station) return false;
+    return (
+      Math.hypot(this.drag.x - station.x, this.drag.y - station.y) <=
+      this.getAutoAnchorRadius()
+    );
+  }
+
+  private shouldSuppressExtendPreview(
+    line: PlayerLine,
+    origin: DragOrigin,
+    cursor: Point,
+    stationMap: Map<string, Station>,
+  ): boolean {
+    if (origin.mode !== "extend" || !origin.extendEnd || line.stationIds.length < 2) {
+      return false;
+    }
+
+    const endpoint = stationMap.get(origin.fromStationId);
+    if (!endpoint) return false;
+
+    const neighborId =
+      origin.extendEnd === "head"
+        ? line.stationIds[1]
+        : line.stationIds[line.stationIds.length - 2];
+    const neighbor = neighborId ? stationMap.get(neighborId) : undefined;
+    if (!neighbor) return false;
+
+    return isBackwardExtensionCursor(endpoint, neighbor, cursor);
   }
 
   private nearestOpenLineEndpoint(
@@ -862,12 +906,17 @@ export class MapRenderer {
 
         if (!fromPoint) return;
 
+        const cursor = { x: drag.x, y: drag.y };
+        if (this.shouldSuppressExtendPreview(line, drag.origin, cursor, stationMap)) {
+          return;
+        }
+
         const endPoint = drag.snapTargetId
           ? stationMap.get(drag.snapTargetId)
           : undefined;
 
         if (!endPoint) {
-          legs.push([fromPoint, { x: drag.x, y: drag.y }]);
+          legs.push([fromPoint, cursor]);
         } else {
           legs.push([fromPoint, endPoint]);
         }
@@ -948,6 +997,7 @@ export class MapRenderer {
 
   private tryAutoAnchor(): void {
     if (!this.drag?.snapTargetId) return;
+    if (!this.canAutoAnchorAt(this.drag.snapTargetId)) return;
 
     const { origin, snapTargetId, pointerId } = this.drag;
 
@@ -980,10 +1030,10 @@ export class MapRenderer {
     this.drag = {
       origin: nextOrigin,
       pointerId,
-      x: station.x,
-      y: station.y,
+      x: this.drag.x,
+      y: this.drag.y,
       snapTargetId: null,
-      chainAnchor: { x: station.x, y: station.y },
+      chainAnchor: { x: this.drag.x, y: this.drag.y },
     };
 
     this.activeRoutedLines = this.buildRoutedLines("active");
@@ -1334,7 +1384,9 @@ export class MapRenderer {
       }
       if (snapTargetId !== previousSnap) {
         this.redrawStations();
-        if (snapTargetId) this.tryAutoAnchor();
+      }
+      if (snapTargetId && this.canAutoAnchorAt(snapTargetId)) {
+        this.tryAutoAnchor();
       }
       return;
     }
