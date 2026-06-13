@@ -166,6 +166,28 @@ export class GameState {
     return this.lines.find((line) => line.stationIds.length === 0);
   }
 
+  beginExtendDrag(lineId: string, extendEnd: ExtendEnd): DragOrigin | null {
+    const line = this.getLine(lineId);
+    if (!line || isClosedLoopRoute(line.stationIds, line.isLoop) || line.stationIds.length < 2) {
+      return null;
+    }
+
+    const fromStationId =
+      extendEnd === "head"
+        ? line.stationIds[0]
+        : line.stationIds[line.stationIds.length - 1];
+    if (!fromStationId) return null;
+
+    this.activeLineId = lineId;
+    return {
+      lineId,
+      fromStationId,
+      addedOnDragStart: false,
+      mode: "extend",
+      extendEnd,
+    };
+  }
+
   beginDragFromStation(stationId: string, lineId?: string): DragOrigin | null {
     const extendable = lineId
       ? this.getExtendableLinesAtStation(stationId).find((line) => line.id === lineId)

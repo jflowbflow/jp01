@@ -9,6 +9,7 @@ import {
 } from "../geometry/octilinearRouter.ts";
 import type { Passenger, PlayerLine, Point, RoutedLine, Station } from "../model/types.ts";
 import { loopHandleGeometryForLine } from "./loopHandle.ts";
+import { computeExtendHandle, trimSegmentHitEndpoints } from "./extendHandle.ts";
 import {
   createHitArea,
   createStationShape,
@@ -44,7 +45,7 @@ type BounceState = {
 };
 
 type PendingPointer = {
-  kind: "station" | "segment" | "handle";
+  kind: "station" | "segment" | "handle" | "extend";
   pointerId: number;
   startClientX: number;
   startClientY: number;
@@ -52,6 +53,7 @@ type PendingPointer = {
   stationId?: string;
   lineId?: string;
   segmentIndex?: number;
+  extendEnd?: "head" | "tail";
 };
 
 type RemovePicker = {
@@ -190,6 +192,7 @@ export class MapRenderer {
     this.activeRoutedLines = this.buildRoutedLines("active");
     this.drawRoutes();
     this.drawRouteHits();
+    this.drawExtendHandles();
     this.drawLoopHandles();
     this.drawTrains();
     this.drawPreview();
@@ -287,6 +290,7 @@ export class MapRenderer {
     route: { stationIds: string[]; isLoop: boolean },
     color: string,
     fadedSegmentKeys: Set<string>,
+    omittedSegmentKeys: Set<string> = new Set(),
   ): void {
     const stationMap = this.getStationMap();
     const closed = isClosedLoopRoute(route.stationIds, route.isLoop);
@@ -301,6 +305,9 @@ export class MapRenderer {
           ? route.stationIds[index + 1]
           : route.stationIds[0];
 
+      const key = this.segmentDirectedKey(fromId, toId);
+      if (omittedSegmentKeys.has(key)) continue;
+
       const from = stationMap.get(fromId);
       const to = stationMap.get(toId);
       if (!from || !to) continue;
@@ -308,7 +315,7 @@ export class MapRenderer {
       const pathD = routeOctilinearOpen([from, to]);
       if (!pathD) continue;
 
-      const faded = fadedSegmentKeys.has(this.segmentDirectedKey(fromId, toId));
+      const faded = fadedSegmentKeys.has(key);
       this.appendRouteTrack(
         parent,
         pathD,
@@ -378,14 +385,15 @@ export class MapRenderer {
   }
 
   private shouldRedrawRoutesForSegmentDrag(): boolean {
-    return this.isSegmentDragActive() && this.isTrainOnDraggingSegment();
+    return this.isSegmentDragActive();
   }
 
   private drawRoutes(): void {
     this.routesGroup.replaceChildren();
     const stationMap = this.getStationMap();
     const draggingSegment = this.getDraggingSegment();
-    const fadeDraggedSegment = draggingSegment !== null && this.isTrainOnDraggingSegment();
+    const segmentDragActive = draggingSegment !== null && this.isSegmentDragActive();
+    const fadeDraggedSegment = segmentDragActive && this.isTrainOnDraggingSegment();
     const fadedActiveLineIds = new Set<string>();
 
     for (const routed of this.activeRoutedLines) {
@@ -407,19 +415,19 @@ export class MapRenderer {
         continue;
       }
 
-      if (
-        fadeDraggedSegment &&
-        draggingSegment &&
-        draggingSegment.lineId === line.id
-      ) {
-        const fadedKeys = new Set([
-          this.segmentDirectedKey(draggingSegment.fromId, draggingSegment.toId),
-        ]);
+      if (segmentDragActive && draggingSegment && draggingSegment.lineId === line.id) {
+        const draggedKey = this.segmentDirectedKey(
+          draggingSegment.fromId,
+          draggingSegment.toId,
+        );
+        const fadedKeys = fadeDraggedSegment ? new Set([draggedKey]) : new Set<string>();
+        const omittedKeys = fadeDraggedSegment ? new Set<string>() : new Set([draggedKey]);
         this.drawRouteSegments(
           this.routesGroup,
           this.getDisplayRoute(line),
           line.color,
           fadedKeys,
+          omittedKeys,
         );
         continue;
       }
@@ -441,6 +449,7 @@ export class MapRenderer {
   private drawRouteHits(): void {
     this.routeHitsGroup.replaceChildren();
     const stationMap = this.getStationMap();
+    const hitMargin = this.getBaseRadius() + 14 * this.getMapScale();
 
     for (const line of this.game.getLines()) {
       if (line.stationIds.length < 2) continue;
@@ -461,7 +470,10 @@ export class MapRenderer {
         const to = stationMap.get(toId);
         if (!from || !to) continue;
 
-        const pathD = routeOctilinearOpen([from, to]);
+        const trimmed = trimSegmentHitEndpoints(from, to, hitMargin);
+        if (!trimmed) continue;
+
+        const pathD = routeOctilinearOpen(trimmed);
         if (!pathD) continue;
 
         const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -479,8 +491,75 @@ export class MapRenderer {
     }
   }
 
-  private drawLoopHandles(): void {
+  private drawExtendHandles(): void {
     this.handlesGroup.replaceChildren();
+    const stationMap = this.getStationMap();
+    const stubLength = 18 * this.getMapScale();
+
+    for (const line of this.game.getLines()) {
+      if (isClosedLoopRoute(line.stationIds, line.isLoop) || line.stationIds.length < 2) {
+        continue;
+      }
+
+      const headId = line.stationIds[0];
+      const tailId = line.stationIds[line.stationIds.length - 1];
+      const head = stationMap.get(headId);
+      const tail = stationMap.get(tailId);
+      const headNeighbor = stationMap.get(line.stationIds[1]);
+      const tailNeighbor = stationMap.get(line.stationIds[line.stationIds.length - 2]);
+
+      const ends: Array<{ extendEnd: "head" | "tail"; endpoint: Station; neighbor: Station }> = [];
+      if (head && headNeighbor) ends.push({ extendEnd: "head", endpoint: head, neighbor: headNeighbor });
+      if (tail && tailNeighbor && tailId !== headId) {
+        ends.push({ extendEnd: "tail", endpoint: tail, neighbor: tailNeighbor });
+      }
+
+      for (const { extendEnd, endpoint, neighbor } of ends) {
+        const geometry = computeExtendHandle(endpoint, neighbor, stubLength);
+
+        const stub = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        stub.setAttribute("d", geometry.stubPath);
+        stub.setAttribute("fill", "none");
+        stub.setAttribute("stroke", line.color);
+        stub.setAttribute("stroke-width", String(this.getLineWidth()));
+        stub.setAttribute("stroke-linecap", "round");
+        stub.setAttribute("pointer-events", "none");
+
+        const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        hit.setAttribute("d", geometry.stubPath);
+        hit.setAttribute("fill", "none");
+        hit.setAttribute("stroke", "transparent");
+        hit.setAttribute("stroke-width", String(this.getRouteHitWidth()));
+        hit.setAttribute("stroke-linecap", "round");
+        hit.style.cursor = "grab";
+        hit.dataset.extendHandle = line.id;
+        hit.dataset.extendEnd = extendEnd;
+
+        this.handlesGroup.append(stub, hit);
+      }
+    }
+  }
+
+  private getExtendHandleTip(lineId: string, extendEnd: "head" | "tail"): Point | null {
+    const line = this.game.getLine(lineId);
+    if (!line || line.stationIds.length < 2) return null;
+
+    const stationMap = this.getStationMap();
+    const stubLength = 18 * this.getMapScale();
+    if (extendEnd === "head") {
+      const endpoint = stationMap.get(line.stationIds[0]);
+      const neighbor = stationMap.get(line.stationIds[1]);
+      if (!endpoint || !neighbor) return null;
+      return computeExtendHandle(endpoint, neighbor, stubLength).tip;
+    }
+
+    const endpoint = stationMap.get(line.stationIds[line.stationIds.length - 1]);
+    const neighbor = stationMap.get(line.stationIds[line.stationIds.length - 2]);
+    if (!endpoint || !neighbor) return null;
+    return computeExtendHandle(endpoint, neighbor, stubLength).tip;
+  }
+
+  private drawLoopHandles(): void {
     const stationMap = this.getStationMap();
 
     for (const line of this.game.getLines()) {
@@ -688,6 +767,11 @@ export class MapRenderer {
 
         if (drag.origin.mode === "unloop") {
           fromPoint = this.getLoopHandleTip(drag.origin.lineId) ?? undefined;
+        } else if (drag.origin.mode === "extend" && drag.origin.extendEnd) {
+          fromPoint =
+            this.getExtendHandleTip(drag.origin.lineId, drag.origin.extendEnd) ??
+            stationMap.get(drag.origin.fromStationId) ??
+            undefined;
         } else {
           fromPoint = stationMap.get(drag.origin.fromStationId);
         }
@@ -911,6 +995,19 @@ export class MapRenderer {
   }
 
   private startPendingDrag(pending: PendingPointer): void {
+    if (
+      pending.kind === "extend" &&
+      pending.lineId &&
+      pending.extendEnd
+    ) {
+      const origin = this.game.beginExtendDrag(pending.lineId, pending.extendEnd);
+      if (!origin) return;
+      const tip = this.getExtendHandleTip(pending.lineId, pending.extendEnd);
+      const point = tip ?? this.clientToWorld(pending.startClientX, pending.startClientY);
+      this.startDrag(origin, pending.pointerId, point.x, point.y);
+      return;
+    }
+
     if (pending.kind === "segment" && pending.lineId !== undefined && pending.segmentIndex !== undefined) {
       const origin = this.game.beginInsertDrag(pending.lineId, pending.segmentIndex);
       if (!origin) return;
@@ -990,6 +1087,24 @@ export class MapRenderer {
         startClientY: event.clientY,
         startedAt: performance.now(),
         lineId: loopHandleLineId,
+      };
+      this.svg.setPointerCapture(event.pointerId);
+      return;
+    }
+
+    const extendHandleEl = target.closest<SVGElement>("[data-extend-handle]");
+    const extendLineId = extendHandleEl?.dataset.extendHandle;
+    const extendEnd = extendHandleEl?.dataset.extendEnd;
+    if (extendLineId && (extendEnd === "head" || extendEnd === "tail")) {
+      event.preventDefault();
+      this.pendingPointer = {
+        kind: "extend",
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startedAt: performance.now(),
+        lineId: extendLineId,
+        extendEnd,
       };
       this.svg.setPointerCapture(event.pointerId);
       return;
@@ -1166,7 +1281,7 @@ export class MapRenderer {
 
       if (this.bounce) {
         this.drawPreview();
-        if (this.bounce.origin.mode === "insert" && this.isTrainOnDraggingSegment()) {
+        if (this.bounce.origin.mode === "insert") {
           this.drawRoutes();
         }
         if (now - this.bounce.startTime >= BOUNCE_MS) {
