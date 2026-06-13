@@ -52,3 +52,31 @@ export function trimSegmentHitEndpoints(
     { x: to.x - ux * margin, y: to.y - uy * margin },
   ];
 }
+
+/** Which endpoint cap contains the point, if any (for extend-vs-reroute priority). */
+export function endpointCapAtPoint(
+  point: Point,
+  from: Point,
+  to: Point,
+  capAlong: number,
+  capPerp: number,
+): "from" | "to" | null {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) {
+    return Math.hypot(point.x - from.x, point.y - from.y) <= capAlong ? "from" : null;
+  }
+
+  const ux = dx / len;
+  const uy = dy / len;
+  const px = point.x - from.x;
+  const py = point.y - from.y;
+  const along = px * ux + py * uy;
+  const perp = Math.abs(px * -uy + py * ux);
+  if (perp > capPerp) return null;
+
+  if (along >= 0 && along <= capAlong) return "from";
+  if (along <= len && along >= len - capAlong) return "to";
+  return null;
+}

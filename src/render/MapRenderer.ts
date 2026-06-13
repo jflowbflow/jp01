@@ -9,7 +9,7 @@ import {
 } from "../geometry/octilinearRouter.ts";
 import type { Passenger, PlayerLine, Point, RoutedLine, Station } from "../model/types.ts";
 import { loopHandleGeometryForLine } from "./loopHandle.ts";
-import { computeExtendHandle, trimSegmentHitEndpoints } from "./extendHandle.ts";
+import { computeExtendHandle, endpointCapAtPoint, trimSegmentHitEndpoints } from "./extendHandle.ts";
 import {
   createHitArea,
   createStationShape,
@@ -173,6 +173,60 @@ export class MapRenderer {
       if (distance <= hitRadius && distance < closestDistance) {
         closest = station;
         closestDistance = distance;
+      }
+    }
+
+    return closest;
+  }
+
+  /** Prefer extend-from-endpoint over segment reroute when clicking near a line end. */
+  private findExtendableEndpointNear(clientX: number, clientY: number): Station | null {
+    const point = this.clientToWorld(clientX, clientY);
+    const stationMap = this.getStationMap();
+    const capAlong = this.getBaseRadius() + 14 * this.getMapScale();
+    const capPerp = this.getRouteHitWidth() * 0.55;
+    let closest: Station | null = null;
+    let closestDistance = Infinity;
+
+    for (const line of this.game.getLines()) {
+      if (isClosedLoopRoute(line.stationIds, line.isLoop) || line.stationIds.length < 2) {
+        continue;
+      }
+
+      const segmentCount = line.stationIds.length - 1;
+      for (let index = 0; index < segmentCount; index += 1) {
+        const fromId = line.stationIds[index];
+        const toId = line.stationIds[index + 1];
+        const from = stationMap.get(fromId);
+        const to = stationMap.get(toId);
+        if (!from || !to) continue;
+
+        const trimmed = trimSegmentHitEndpoints(from, to, capAlong);
+        let cap: "from" | "to" | null;
+        if (!trimmed) {
+          const nearFrom = Math.hypot(point.x - from.x, point.y - from.y);
+          const nearTo = Math.hypot(point.x - to.x, point.y - to.y);
+          const stationCap = this.getBaseRadius() + 12;
+          if (nearFrom <= stationCap && nearFrom <= nearTo) cap = "from";
+          else if (nearTo <= stationCap) cap = "to";
+          else cap = null;
+        } else {
+          cap = endpointCapAtPoint(point, from, to, capAlong, capPerp);
+        }
+
+        if (!cap) continue;
+
+        const stationId = cap === "from" ? fromId : toId;
+        if (this.game.getExtendableLinesAtStation(stationId).length === 0) continue;
+
+        const station = stationMap.get(stationId);
+        if (!station) continue;
+
+        const distance = Math.hypot(station.x - point.x, station.y - point.y);
+        if (distance < closestDistance) {
+          closest = station;
+          closestDistance = distance;
+        }
       }
     }
 
@@ -1009,6 +1063,20 @@ export class MapRenderer {
     }
 
     if (pending.kind === "segment" && pending.lineId !== undefined && pending.segmentIndex !== undefined) {
+      const endpoint = this.findExtendableEndpointNear(
+        pending.startClientX,
+        pending.startClientY,
+      );
+      if (endpoint) {
+        this.tryStartStationDrag(
+          endpoint.id,
+          pending.pointerId,
+          pending.startClientX,
+          pending.startClientY,
+        );
+        return;
+      }
+
       const origin = this.game.beginInsertDrag(pending.lineId, pending.segmentIndex);
       if (!origin) return;
       const point = this.clientToWorld(pending.startClientX, pending.startClientY);
@@ -1105,6 +1173,25 @@ export class MapRenderer {
         startedAt: performance.now(),
         lineId: extendLineId,
         extendEnd,
+      };
+      this.svg.setPointerCapture(event.pointerId);
+      return;
+    }
+
+    const extendableEndpoint = this.findExtendableEndpointNear(
+      event.clientX,
+      event.clientY,
+    );
+    if (extendableEndpoint) {
+      event.preventDefault();
+      this.clearUndoHold();
+      this.pendingPointer = {
+        kind: "station",
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startedAt: performance.now(),
+        stationId: extendableEndpoint.id,
       };
       this.svg.setPointerCapture(event.pointerId);
       return;
