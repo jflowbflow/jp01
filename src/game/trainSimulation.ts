@@ -2,13 +2,11 @@ import {
   pathAngleAtLength,
   pathTotalLength,
   pointAtPathLength,
-  routeOctilinear,
-  routeOctilinearOpen,
   stationStopsOnPath,
 } from "../geometry/octilinearRouter.ts";
 import type { Station, Train } from "../model/types.ts";
 import { TRAIN_CAPACITY } from "../model/types.ts";
-import { getTrainAtStationOnLine, isTrainOnAffectedSegments } from "./pendingRoute.ts";
+import { getTrainAtStationOnLine, isTrainOnAffectedSegments, routePathForStations } from "./pendingRoute.ts";
 import type { GameState } from "./GameState.ts";
 
 const DWELL_SECONDS = 0.55;
@@ -76,9 +74,7 @@ export class TrainSimulation {
         .map((id) => stationMap.get(id))
         .filter((station): station is Station => Boolean(station));
 
-      const pathD = route.isLoop
-        ? routeOctilinear(stations)
-        : routeOctilinearOpen(stations);
+      const pathD = routePathForStations(stations, route.isLoop);
 
       if (!pathD) continue;
 
@@ -94,9 +90,7 @@ export class TrainSimulation {
         const updatedStations = updatedRoute.stationIds
           .map((id) => stationMap.get(id))
           .filter((station): station is Station => Boolean(station));
-        const updatedPathD = updatedRoute.isLoop
-          ? routeOctilinear(updatedStations)
-          : routeOctilinearOpen(updatedStations);
+        const updatedPathD = routePathForStations(updatedStations, updatedRoute.isLoop);
         if (updatedPathD) {
           train.displayAngle = pathAngleAtLength(updatedPathD, train.distance);
         }
@@ -128,9 +122,7 @@ export class TrainSimulation {
           const updatedStations = updatedRoute.stationIds
             .map((id) => stationMap.get(id))
             .filter((station): station is Station => Boolean(station));
-          const updatedPathD = updatedRoute.isLoop
-            ? routeOctilinear(updatedStations)
-            : routeOctilinearOpen(updatedStations);
+          const updatedPathD = routePathForStations(updatedStations, updatedRoute.isLoop);
           if (updatedPathD) {
             train.displayAngle = pathAngleAtLength(updatedPathD, train.distance);
           }
@@ -186,9 +178,7 @@ export class TrainSimulation {
 
       if (stations.length < 2) continue;
 
-      const pathD = route.isLoop
-        ? routeOctilinear(stations)
-        : routeOctilinearOpen(stations);
+      const pathD = routePathForStations(stations, route.isLoop);
 
       if (!pathD) continue;
 

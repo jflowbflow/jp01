@@ -1,15 +1,20 @@
 import { GameState, type DragOrigin } from "../game/GameState.ts";
-import { buildPendingSegments, diffRemovedActiveSegments, isTrainOnAffectedSegments, isTrainOnRouteSegment } from "../game/pendingRoute.ts";
+import { buildPendingSegments, diffRemovedActiveSegments, isClosedLoopRoute, isTrainOccupyingSegment, isTrainOnAffectedSegments, isTwoNodeOpenLine, routePathForStations } from "../game/pendingRoute.ts";
 import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
 import { mapScale, stationRadius } from "../game/stationSpawner.ts";
 import {
   pathTotalLength,
-  routeOctilinear,
   routeOctilinearOpen,
 } from "../geometry/octilinearRouter.ts";
 import type { Passenger, PlayerLine, Point, RoutedLine, Station } from "../model/types.ts";
 import { loopHandleGeometryForLine } from "./loopHandle.ts";
+import {
+  computeExtendHandle,
+  endpointCapAtPoint,
+  isBackwardExtensionCursor,
+  trimSegmentHitEndpoints,
+} from "./extendHandle.ts";
 import {
   createHitArea,
   createStationShape,
@@ -27,6 +32,8 @@ const BOUNCE_MS = 220;
 const DRAG_START_PX = 5;
 const HOLD_CANCEL_PX = 22;
 const UNDO_HOLD_MS = 480;
+/** Must be within this distance of a station center before hover-snap commits. */
+const AUTO_ANCHOR_RADIUS_PX = 8;
 
 type DragState = {
   origin: DragOrigin;
@@ -34,6 +41,8 @@ type DragState = {
   x: number;
   y: number;
   snapTargetId: string | null;
+  /** Suppress preview until pointer moves away after auto-anchor chain. */
+  chainAnchor?: Point;
 };
 
 type BounceState = {
@@ -45,7 +54,7 @@ type BounceState = {
 };
 
 type PendingPointer = {
-  kind: "station" | "segment" | "handle";
+  kind: "station" | "segment" | "handle" | "extend";
   pointerId: number;
   startClientX: number;
   startClientY: number;
@@ -53,6 +62,7 @@ type PendingPointer = {
   stationId?: string;
   lineId?: string;
   segmentIndex?: number;
+  extendEnd?: "head" | "tail";
 };
 
 type RemovePicker = {
@@ -178,6 +188,116 @@ export class MapRenderer {
     return closest;
   }
 
+  /** Prefer extend-from-endpoint over segment reroute when clicking near a line end. */
+  private findExtendableEndpointNear(clientX: number, clientY: number): Station | null {
+    const point = this.clientToWorld(clientX, clientY);
+    const stationMap = this.getStationMap();
+    const capAlong = this.getBaseRadius() + 14 * this.getMapScale();
+    const capPerp = this.getRouteHitWidth() * 0.55;
+    let closest: Station | null = null;
+    let closestDistance = Infinity;
+
+    for (const line of this.game.getLines()) {
+      if (isClosedLoopRoute(line.stationIds, line.isLoop) || line.stationIds.length < 2) {
+        continue;
+      }
+
+      const segmentCount = line.stationIds.length - 1;
+      for (let index = 0; index < segmentCount; index += 1) {
+        const fromId = line.stationIds[index];
+        const toId = line.stationIds[index + 1];
+        const from = stationMap.get(fromId);
+        const to = stationMap.get(toId);
+        if (!from || !to) continue;
+
+        const trimmed = trimSegmentHitEndpoints(from, to, capAlong);
+        let cap: "from" | "to" | null;
+        if (!trimmed) {
+          const nearFrom = Math.hypot(point.x - from.x, point.y - from.y);
+          const nearTo = Math.hypot(point.x - to.x, point.y - to.y);
+          const stationCap = this.getBaseRadius() + 12;
+          if (nearFrom <= stationCap && nearFrom <= nearTo) cap = "from";
+          else if (nearTo <= stationCap) cap = "to";
+          else cap = null;
+        } else {
+          cap = endpointCapAtPoint(point, from, to, capAlong, capPerp);
+        }
+
+        if (!cap) continue;
+
+        const stationId = cap === "from" ? fromId : toId;
+        if (this.game.getExtendableLinesAtStation(stationId).length === 0) continue;
+
+        const station = stationMap.get(stationId);
+        if (!station) continue;
+
+        const distance = Math.hypot(station.x - point.x, station.y - point.y);
+        if (distance < closestDistance) {
+          closest = station;
+          closestDistance = distance;
+        }
+      }
+    }
+
+    return closest;
+  }
+
+  private getAutoAnchorRadius(): number {
+    return this.getBaseRadius() + AUTO_ANCHOR_RADIUS_PX * this.getMapScale();
+  }
+
+  private canAutoAnchorAt(snapTargetId: string): boolean {
+    if (!this.drag) return false;
+    const station = this.getStationMap().get(snapTargetId);
+    if (!station) return false;
+    return (
+      Math.hypot(this.drag.x - station.x, this.drag.y - station.y) <=
+      this.getAutoAnchorRadius()
+    );
+  }
+
+  private shouldSuppressExtendPreview(
+    line: PlayerLine,
+    origin: DragOrigin,
+    cursor: Point,
+    stationMap: Map<string, Station>,
+  ): boolean {
+    if (origin.mode !== "extend" || !origin.extendEnd || line.stationIds.length < 2) {
+      return false;
+    }
+
+    const endpoint = stationMap.get(origin.fromStationId);
+    if (!endpoint) return false;
+
+    const neighborId =
+      origin.extendEnd === "head"
+        ? line.stationIds[1]
+        : line.stationIds[line.stationIds.length - 2];
+    const neighbor = neighborId ? stationMap.get(neighborId) : undefined;
+    if (!neighbor) return false;
+
+    return isBackwardExtensionCursor(endpoint, neighbor, cursor);
+  }
+
+  private nearestOpenLineEndpoint(
+    lineId: string,
+    clientX: number,
+    clientY: number,
+  ): "head" | "tail" | null {
+    const line = this.game.getLine(lineId);
+    if (!line || !isTwoNodeOpenLine(line)) return null;
+
+    const stationMap = this.getStationMap();
+    const point = this.clientToWorld(clientX, clientY);
+    const head = stationMap.get(line.stationIds[0]);
+    const tail = stationMap.get(line.stationIds[1]);
+    if (!head || !tail) return null;
+
+    const headDistance = Math.hypot(head.x - point.x, head.y - point.y);
+    const tailDistance = Math.hypot(tail.x - point.x, tail.y - point.y);
+    return headDistance <= tailDistance ? "head" : "tail";
+  }
+
   private isInteracting(): boolean {
     return (
       this.drag !== null ||
@@ -191,9 +311,26 @@ export class MapRenderer {
     this.activeRoutedLines = this.buildRoutedLines("active");
     this.drawRoutes();
     this.drawRouteHits();
+    this.drawExtendHandles();
     this.drawLoopHandles();
     this.drawTrains();
     this.drawPreview();
+  }
+
+  private getDisplayRoute(line: PlayerLine): {
+    stationIds: string[];
+    isLoop: boolean;
+    loopHandleStationId?: string;
+  } {
+    if (line.stationIds.length >= 2) {
+      return {
+        stationIds: line.stationIds,
+        isLoop: isClosedLoopRoute(line.stationIds, line.isLoop),
+        loopHandleStationId: line.loopHandleStationId,
+      };
+    }
+
+    return this.game.getActiveRoute(line);
   }
 
   private buildRoutedLines(kind: "active" | "pending"): RoutedLine[] {
@@ -203,10 +340,12 @@ export class MapRenderer {
       if (kind === "pending" && !this.game.hasPendingRoute(line)) return [];
 
       const route =
-        kind === "active" ? this.game.getActiveRoute(line) : {
-          stationIds: line.stationIds,
-          isLoop: line.isLoop,
-        };
+        kind === "active"
+          ? this.getDisplayRoute(line)
+          : {
+              stationIds: line.stationIds,
+              isLoop: isClosedLoopRoute(line.stationIds, line.isLoop),
+            };
 
       const lineStations = route.stationIds
         .map((id) => stationMap.get(id))
@@ -214,9 +353,7 @@ export class MapRenderer {
 
       if (lineStations.length < 2) return [];
 
-      const pathD = route.isLoop
-        ? routeOctilinear(lineStations)
-        : routeOctilinearOpen(lineStations);
+      const pathD = routePathForStations(lineStations, route.isLoop);
 
       if (!pathD) return [];
 
@@ -257,25 +394,76 @@ export class MapRenderer {
     if (segmentIndex < line.stationIds.length - 1) {
       return stationMap.get(line.stationIds[segmentIndex + 1]);
     }
-    if (line.isLoop) {
+    if (isClosedLoopRoute(line.stationIds, line.isLoop)) {
       return stationMap.get(line.stationIds[0]);
     }
     return undefined;
+  }
+
+  /** Full route path with the dragged segment rerouted through the hinge. */
+  private buildInsertDragRoutePoints(
+    line: PlayerLine,
+    insertAfterIndex: number,
+    hinge: Point,
+    stationMap: Map<string, Station>,
+  ): Point[] {
+    const points: Point[] = [];
+    for (let index = 0; index <= insertAfterIndex; index += 1) {
+      const station = stationMap.get(line.stationIds[index]);
+      if (station) points.push(station);
+    }
+    points.push(hinge);
+
+    for (let index = insertAfterIndex + 1; index < line.stationIds.length; index += 1) {
+      const station = stationMap.get(line.stationIds[index]);
+      if (station) points.push(station);
+    }
+
+    const endStation = this.getInsertSegmentEndStation(line, insertAfterIndex, stationMap);
+    if (endStation) {
+      const last = points[points.length - 1];
+      if (!last || last.x !== endStation.x || last.y !== endStation.y) {
+        points.push(endStation);
+      }
+    }
+
+    return points;
+  }
+
+  private appendPreviewPath(
+    pathD: string,
+    color: string,
+    dashed: boolean,
+  ): void {
+    const preview = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    preview.setAttribute("d", pathD);
+    preview.setAttribute("fill", "none");
+    preview.setAttribute("stroke", color);
+    preview.setAttribute("stroke-width", String(this.getLineWidth()));
+    preview.setAttribute("stroke-linecap", "round");
+    preview.setAttribute("stroke-linejoin", "round");
+    preview.setAttribute("opacity", "0.95");
+    if (dashed) {
+      preview.setAttribute("stroke-dasharray", PREVIEW_DASH);
+    }
+    preview.setAttribute("pointer-events", "none");
+    this.previewGroup.append(preview);
   }
 
   private segmentDirectedKey(fromId: string, toId: string): string {
     return `${fromId}>${toId}`;
   }
 
-  private drawActiveRouteSegments(
+  private drawRouteSegments(
     parent: SVGGElement,
-    line: PlayerLine,
+    route: { stationIds: string[]; isLoop: boolean },
     color: string,
     fadedSegmentKeys: Set<string>,
+    omittedSegmentKeys: Set<string> = new Set(),
   ): void {
-    const route = this.game.getActiveRoute(line);
     const stationMap = this.getStationMap();
-    const segmentCount = route.isLoop
+    const closed = isClosedLoopRoute(route.stationIds, route.isLoop);
+    const segmentCount = closed
       ? route.stationIds.length
       : route.stationIds.length - 1;
 
@@ -286,6 +474,9 @@ export class MapRenderer {
           ? route.stationIds[index + 1]
           : route.stationIds[0];
 
+      const key = this.segmentDirectedKey(fromId, toId);
+      if (omittedSegmentKeys.has(key)) continue;
+
       const from = stationMap.get(fromId);
       const to = stationMap.get(toId);
       if (!from || !to) continue;
@@ -293,7 +484,7 @@ export class MapRenderer {
       const pathD = routeOctilinearOpen([from, to]);
       if (!pathD) continue;
 
-      const faded = fadedSegmentKeys.has(this.segmentDirectedKey(fromId, toId));
+      const faded = fadedSegmentKeys.has(key);
       this.appendRouteTrack(
         parent,
         pathD,
@@ -301,6 +492,15 @@ export class MapRenderer {
         faded ? String(PENDING_ROUTE_OPACITY) : "0.95",
       );
     }
+  }
+
+  private drawActiveRouteSegments(
+    parent: SVGGElement,
+    line: PlayerLine,
+    color: string,
+    fadedSegmentKeys: Set<string>,
+  ): void {
+    this.drawRouteSegments(parent, this.game.getActiveRoute(line), color, fadedSegmentKeys);
   }
 
   private getDraggingSegment():
@@ -326,7 +526,7 @@ export class MapRenderer {
     let toId: string | undefined;
     if (origin.insertAfterIndex < line.stationIds.length - 1) {
       toId = line.stationIds[origin.insertAfterIndex + 1];
-    } else if (line.isLoop) {
+    } else if (isClosedLoopRoute(line.stationIds, line.isLoop)) {
       toId = line.stationIds[0];
     }
 
@@ -343,14 +543,27 @@ export class MapRenderer {
     const train = this.trainSimulation.getTrain(segment.lineId);
     if (!line || !train) return false;
 
-    return isTrainOnRouteSegment(train, line, this.getStationMap(), segment);
+    return isTrainOccupyingSegment(train, line, this.getStationMap(), segment);
+  }
+
+  private isSegmentDragActive(): boolean {
+    return (
+      this.drag?.origin.mode === "insert" ||
+      this.bounce?.origin.mode === "insert"
+    );
+  }
+
+  private shouldRedrawRoutesForSegmentDrag(): boolean {
+    return this.isSegmentDragActive();
   }
 
   private drawRoutes(): void {
     this.routesGroup.replaceChildren();
     const stationMap = this.getStationMap();
     const draggingSegment = this.getDraggingSegment();
-    const fadeDraggedSegment = draggingSegment !== null && this.isTrainOnDraggingSegment();
+    const segmentDragActive = draggingSegment !== null && this.isSegmentDragActive();
+    const fadeDraggedSegment = segmentDragActive && this.isTrainOnDraggingSegment();
+    const fadedActiveLineIds = new Set<string>();
 
     for (const routed of this.activeRoutedLines) {
       const line = routed.line;
@@ -361,6 +574,7 @@ export class MapRenderer {
         isTrainOnAffectedSegments(train, line, stationMap);
 
       if (fadeOldSegments) {
+        fadedActiveLineIds.add(line.id);
         const fadedKeys = new Set(
           diffRemovedActiveSegments(line).map((segment) =>
             this.segmentDirectedKey(segment.fromId, segment.toId),
@@ -370,15 +584,20 @@ export class MapRenderer {
         continue;
       }
 
-      if (
-        fadeDraggedSegment &&
-        draggingSegment &&
-        draggingSegment.lineId === line.id
-      ) {
-        const fadedKeys = new Set([
-          this.segmentDirectedKey(draggingSegment.fromId, draggingSegment.toId),
-        ]);
-        this.drawActiveRouteSegments(this.routesGroup, line, line.color, fadedKeys);
+      if (segmentDragActive && draggingSegment && draggingSegment.lineId === line.id) {
+        if (fadeDraggedSegment) {
+          const draggedKey = this.segmentDirectedKey(
+            draggingSegment.fromId,
+            draggingSegment.toId,
+          );
+          this.drawRouteSegments(
+            this.routesGroup,
+            this.getDisplayRoute(line),
+            line.color,
+            new Set([draggedKey]),
+            new Set(),
+          );
+        }
         continue;
       }
 
@@ -386,6 +605,7 @@ export class MapRenderer {
     }
 
     for (const line of this.game.getLines()) {
+      if (!fadedActiveLineIds.has(line.id)) continue;
       if (!this.game.hasPendingRoute(line)) continue;
       if (!this.trainSimulation.getTrain(line.id)) continue;
 
@@ -398,11 +618,14 @@ export class MapRenderer {
   private drawRouteHits(): void {
     this.routeHitsGroup.replaceChildren();
     const stationMap = this.getStationMap();
+    const hitMargin = this.getBaseRadius() + 14 * this.getMapScale();
 
     for (const line of this.game.getLines()) {
       if (line.stationIds.length < 2) continue;
+      if (isTwoNodeOpenLine(line)) continue;
 
-      const segmentCount = line.isLoop
+      const closed = isClosedLoopRoute(line.stationIds, line.isLoop);
+      const segmentCount = closed
         ? line.stationIds.length
         : line.stationIds.length - 1;
 
@@ -417,7 +640,10 @@ export class MapRenderer {
         const to = stationMap.get(toId);
         if (!from || !to) continue;
 
-        const pathD = routeOctilinearOpen([from, to]);
+        const trimmed = trimSegmentHitEndpoints(from, to, hitMargin);
+        if (!trimmed) continue;
+
+        const pathD = routeOctilinearOpen(trimmed);
         if (!pathD) continue;
 
         const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -435,12 +661,79 @@ export class MapRenderer {
     }
   }
 
-  private drawLoopHandles(): void {
+  private drawExtendHandles(): void {
     this.handlesGroup.replaceChildren();
+    const stationMap = this.getStationMap();
+    const stubLength = 18 * this.getMapScale();
+
+    for (const line of this.game.getLines()) {
+      if (isClosedLoopRoute(line.stationIds, line.isLoop) || line.stationIds.length < 2) {
+        continue;
+      }
+
+      const headId = line.stationIds[0];
+      const tailId = line.stationIds[line.stationIds.length - 1];
+      const head = stationMap.get(headId);
+      const tail = stationMap.get(tailId);
+      const headNeighbor = stationMap.get(line.stationIds[1]);
+      const tailNeighbor = stationMap.get(line.stationIds[line.stationIds.length - 2]);
+
+      const ends: Array<{ extendEnd: "head" | "tail"; endpoint: Station; neighbor: Station }> = [];
+      if (head && headNeighbor) ends.push({ extendEnd: "head", endpoint: head, neighbor: headNeighbor });
+      if (tail && tailNeighbor && tailId !== headId) {
+        ends.push({ extendEnd: "tail", endpoint: tail, neighbor: tailNeighbor });
+      }
+
+      for (const { extendEnd, endpoint, neighbor } of ends) {
+        const geometry = computeExtendHandle(endpoint, neighbor, stubLength);
+
+        const stub = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        stub.setAttribute("d", geometry.stubPath);
+        stub.setAttribute("fill", "none");
+        stub.setAttribute("stroke", line.color);
+        stub.setAttribute("stroke-width", String(this.getLineWidth()));
+        stub.setAttribute("stroke-linecap", "round");
+        stub.setAttribute("pointer-events", "none");
+
+        const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        hit.setAttribute("d", geometry.stubPath);
+        hit.setAttribute("fill", "none");
+        hit.setAttribute("stroke", "transparent");
+        hit.setAttribute("stroke-width", String(this.getRouteHitWidth()));
+        hit.setAttribute("stroke-linecap", "round");
+        hit.style.cursor = "grab";
+        hit.dataset.extendHandle = line.id;
+        hit.dataset.extendEnd = extendEnd;
+
+        this.handlesGroup.append(stub, hit);
+      }
+    }
+  }
+
+  private getExtendHandleTip(lineId: string, extendEnd: "head" | "tail"): Point | null {
+    const line = this.game.getLine(lineId);
+    if (!line || line.stationIds.length < 2) return null;
+
+    const stationMap = this.getStationMap();
+    const stubLength = 18 * this.getMapScale();
+    if (extendEnd === "head") {
+      const endpoint = stationMap.get(line.stationIds[0]);
+      const neighbor = stationMap.get(line.stationIds[1]);
+      if (!endpoint || !neighbor) return null;
+      return computeExtendHandle(endpoint, neighbor, stubLength).tip;
+    }
+
+    const endpoint = stationMap.get(line.stationIds[line.stationIds.length - 1]);
+    const neighbor = stationMap.get(line.stationIds[line.stationIds.length - 2]);
+    if (!endpoint || !neighbor) return null;
+    return computeExtendHandle(endpoint, neighbor, stubLength).tip;
+  }
+
+  private drawLoopHandles(): void {
     const stationMap = this.getStationMap();
 
     for (const line of this.game.getLines()) {
-      if (!line.isLoop || !line.loopHandleStationId) continue;
+      if (!isClosedLoopRoute(line.stationIds, line.isLoop) || !line.loopHandleStationId) continue;
 
       const geometry = loopHandleGeometryForLine(
         line.stationIds,
@@ -622,6 +915,14 @@ export class MapRenderer {
       const line = this.game.getLine(drag.origin.lineId);
       if (!line) return;
 
+      if (drag.chainAnchor) {
+        const moved = Math.hypot(
+          drag.x - drag.chainAnchor.x,
+          drag.y - drag.chainAnchor.y,
+        );
+        if (moved < DRAG_START_PX) return;
+      }
+
       lineColor = line.color;
       dashed = !drag.snapTargetId;
 
@@ -638,24 +939,48 @@ export class MapRenderer {
           ? (stationMap.get(drag.snapTargetId) ?? { x: drag.x, y: drag.y })
           : { x: drag.x, y: drag.y };
 
+        if (!this.isTrainOnDraggingSegment()) {
+          const routePoints = this.buildInsertDragRoutePoints(
+            line,
+            drag.origin.insertAfterIndex,
+            hinge,
+            stationMap,
+          );
+          const pathD = routeOctilinearOpen(routePoints);
+          if (pathD) {
+            this.appendPreviewPath(pathD, lineColor, dashed);
+            return;
+          }
+        }
+
         legs.push([fromStation, hinge], [hinge, toStation]);
       } else {
         let fromPoint: Point | undefined;
 
         if (drag.origin.mode === "unloop") {
           fromPoint = this.getLoopHandleTip(drag.origin.lineId) ?? undefined;
+        } else if (drag.origin.mode === "extend" && drag.origin.extendEnd) {
+          fromPoint =
+            this.getExtendHandleTip(drag.origin.lineId, drag.origin.extendEnd) ??
+            stationMap.get(drag.origin.fromStationId) ??
+            undefined;
         } else {
           fromPoint = stationMap.get(drag.origin.fromStationId);
         }
 
         if (!fromPoint) return;
 
+        const cursor = { x: drag.x, y: drag.y };
+        if (this.shouldSuppressExtendPreview(line, drag.origin, cursor, stationMap)) {
+          return;
+        }
+
         const endPoint = drag.snapTargetId
           ? stationMap.get(drag.snapTargetId)
           : undefined;
 
         if (!endPoint) {
-          legs.push([fromPoint, { x: drag.x, y: drag.y }]);
+          legs.push([fromPoint, cursor]);
         } else {
           legs.push([fromPoint, endPoint]);
         }
@@ -691,7 +1016,9 @@ export class MapRenderer {
         const fromPoint =
           bounce.origin.mode === "unloop"
             ? (this.getLoopHandleTip(bounce.lineId) ?? station)
-            : station;
+            : bounce.origin.mode === "extend" && bounce.origin.extendEnd
+              ? (this.getExtendHandleTip(bounce.lineId, bounce.origin.extendEnd) ?? station)
+              : station;
 
         legs.push([fromPoint, hinge]);
       }
@@ -700,20 +1027,7 @@ export class MapRenderer {
     for (const [fromPoint, endPoint] of legs) {
       const pathD = routeOctilinearOpen([fromPoint, endPoint]);
       if (!pathD) continue;
-
-      const preview = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      preview.setAttribute("d", pathD);
-      preview.setAttribute("fill", "none");
-      preview.setAttribute("stroke", lineColor);
-      preview.setAttribute("stroke-width", String(this.getLineWidth()));
-      preview.setAttribute("stroke-linecap", "round");
-      preview.setAttribute("stroke-linejoin", "round");
-      preview.setAttribute("opacity", "0.95");
-      if (dashed) {
-        preview.setAttribute("stroke-dasharray", PREVIEW_DASH);
-      }
-      preview.setAttribute("pointer-events", "none");
-      this.previewGroup.append(preview);
+      this.appendPreviewPath(pathD, lineColor, dashed);
     }
   }
 
@@ -734,8 +1048,12 @@ export class MapRenderer {
 
   private tryAutoAnchor(): void {
     if (!this.drag?.snapTargetId) return;
+    if (!this.canAutoAnchorAt(this.drag.snapTargetId)) return;
 
     const { origin, snapTargetId, pointerId } = this.drag;
+
+    if (this.game.wouldCloseLoopOnConnect(origin, snapTargetId)) return;
+
     if (!this.game.connectDragTarget(origin, snapTargetId)) return;
 
     this.afterRouteChange(origin.lineId);
@@ -749,7 +1067,7 @@ export class MapRenderer {
       return;
     }
 
-    if (origin.mode === "insert" || line.isLoop) {
+    if (origin.mode === "insert" || isClosedLoopRoute(line.stationIds, line.isLoop)) {
       this.drag = null;
       this.finishInteractionRefresh();
       return;
@@ -765,9 +1083,10 @@ export class MapRenderer {
     this.drag = {
       origin: nextOrigin,
       pointerId,
-      x: station.x,
-      y: station.y,
+      x: this.drag.x,
+      y: this.drag.y,
       snapTargetId: null,
+      chainAnchor: { x: this.drag.x, y: this.drag.y },
     };
 
     this.activeRoutedLines = this.buildRoutedLines("active");
@@ -867,7 +1186,51 @@ export class MapRenderer {
   }
 
   private startPendingDrag(pending: PendingPointer): void {
+    if (
+      pending.kind === "extend" &&
+      pending.lineId &&
+      pending.extendEnd
+    ) {
+      const origin = this.game.beginExtendDrag(pending.lineId, pending.extendEnd);
+      if (!origin) return;
+      const tip = this.getExtendHandleTip(pending.lineId, pending.extendEnd);
+      const point = tip ?? this.clientToWorld(pending.startClientX, pending.startClientY);
+      this.startDrag(origin, pending.pointerId, point.x, point.y);
+      return;
+    }
+
     if (pending.kind === "segment" && pending.lineId !== undefined && pending.segmentIndex !== undefined) {
+      const line = this.game.getLine(pending.lineId);
+      if (line && isTwoNodeOpenLine(line)) {
+        const extendEnd = this.nearestOpenLineEndpoint(
+          pending.lineId,
+          pending.startClientX,
+          pending.startClientY,
+        );
+        if (extendEnd) {
+          const origin = this.game.beginExtendDrag(pending.lineId, extendEnd);
+          if (!origin) return;
+          const tip = this.getExtendHandleTip(pending.lineId, extendEnd);
+          const point = tip ?? this.clientToWorld(pending.startClientX, pending.startClientY);
+          this.startDrag(origin, pending.pointerId, point.x, point.y);
+          return;
+        }
+      }
+
+      const endpoint = this.findExtendableEndpointNear(
+        pending.startClientX,
+        pending.startClientY,
+      );
+      if (endpoint) {
+        this.tryStartStationDrag(
+          endpoint.id,
+          pending.pointerId,
+          pending.startClientX,
+          pending.startClientY,
+        );
+        return;
+      }
+
       const origin = this.game.beginInsertDrag(pending.lineId, pending.segmentIndex);
       if (!origin) return;
       const point = this.clientToWorld(pending.startClientX, pending.startClientY);
@@ -951,11 +1314,70 @@ export class MapRenderer {
       return;
     }
 
+    const extendHandleEl = target.closest<SVGElement>("[data-extend-handle]");
+    const extendLineId = extendHandleEl?.dataset.extendHandle;
+    const extendEnd = extendHandleEl?.dataset.extendEnd;
+    if (extendLineId && (extendEnd === "head" || extendEnd === "tail")) {
+      event.preventDefault();
+      this.pendingPointer = {
+        kind: "extend",
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startedAt: performance.now(),
+        lineId: extendLineId,
+        extendEnd,
+      };
+      this.svg.setPointerCapture(event.pointerId);
+      return;
+    }
+
+    const extendableEndpoint = this.findExtendableEndpointNear(
+      event.clientX,
+      event.clientY,
+    );
+    if (extendableEndpoint) {
+      event.preventDefault();
+      this.clearUndoHold();
+      this.pendingPointer = {
+        kind: "station",
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startedAt: performance.now(),
+        stationId: extendableEndpoint.id,
+      };
+      this.svg.setPointerCapture(event.pointerId);
+      return;
+    }
+
     const segmentEl = target.closest<SVGElement>("[data-segment-index]");
     const segmentLineId = segmentEl?.dataset.lineId;
     const segmentIndex = segmentEl?.dataset.segmentIndex;
     if (segmentLineId && segmentIndex !== undefined) {
       event.preventDefault();
+      const segmentLine = this.game.getLine(segmentLineId);
+      if (segmentLine && isTwoNodeOpenLine(segmentLine)) {
+        const extendEnd = this.nearestOpenLineEndpoint(
+          segmentLineId,
+          event.clientX,
+          event.clientY,
+        );
+        if (extendEnd) {
+          this.pendingPointer = {
+            kind: "extend",
+            pointerId: event.pointerId,
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            startedAt: performance.now(),
+            lineId: segmentLineId,
+            extendEnd,
+          };
+          this.svg.setPointerCapture(event.pointerId);
+          return;
+        }
+      }
+
       this.pendingPointer = {
         kind: "segment",
         pointerId: event.pointerId,
@@ -1000,14 +1422,24 @@ export class MapRenderer {
           ? hovered.id
           : null;
 
-      this.drag = { ...this.drag, x: point.x, y: point.y, snapTargetId };
+      let chainAnchor = this.drag.chainAnchor;
+      if (chainAnchor) {
+        const moved = Math.hypot(point.x - chainAnchor.x, point.y - chainAnchor.y);
+        if (moved >= DRAG_START_PX) {
+          chainAnchor = undefined;
+        }
+      }
+
+      this.drag = { ...this.drag, x: point.x, y: point.y, snapTargetId, chainAnchor };
       this.drawPreview();
       if (this.drag.origin.mode === "insert") {
         this.drawRoutes();
       }
       if (snapTargetId !== previousSnap) {
         this.redrawStations();
-        if (snapTargetId) this.tryAutoAnchor();
+      }
+      if (snapTargetId && this.canAutoAnchorAt(snapTargetId)) {
+        this.tryAutoAnchor();
       }
       return;
     }
@@ -1141,7 +1573,8 @@ export class MapRenderer {
         this.activeRoutedLines = this.buildRoutedLines("active");
         if (
           trainUpdate.routeApplied ||
-          this.game.getLines().some((line) => this.game.hasPendingRoute(line))
+          this.game.getLines().some((line) => this.game.hasPendingRoute(line)) ||
+          this.shouldRedrawRoutesForSegmentDrag()
         ) {
           this.drawRoutes();
         }

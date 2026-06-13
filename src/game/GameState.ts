@@ -15,6 +15,8 @@ import {
 } from "./stationSpawner.ts";
 import {
   canApplyRouteChangeNow,
+  isClosedLoopRoute,
+  isTwoNodeOpenLine,
   pickJunctionForStationRemoval,
   remapTrainToPendingRoute,
 } from "./pendingRoute.ts";
@@ -114,7 +116,7 @@ export class GameState {
   getActiveRoute(line: PlayerLine): ActiveRoute {
     return {
       stationIds: line.activeStationIds,
-      isLoop: line.activeIsLoop,
+      isLoop: isClosedLoopRoute(line.activeStationIds, line.activeIsLoop),
       loopHandleStationId: line.activeLoopHandleStationId,
     };
   }
@@ -145,7 +147,9 @@ export class GameState {
   }
 
   private getExtendEnd(line: PlayerLine, stationId: string): ExtendEnd | null {
-    if (line.isLoop || line.stationIds.length === 0) return null;
+    if (isClosedLoopRoute(line.stationIds, line.isLoop) || line.stationIds.length === 0) {
+      return null;
+    }
     if (line.stationIds[line.stationIds.length - 1] === stationId) return "tail";
     if (line.stationIds[0] === stationId) return "head";
     return null;
@@ -163,40 +167,29 @@ export class GameState {
     return this.lines.find((line) => line.stationIds.length === 0);
   }
 
-  getTwoNodeLineAtStation(stationId: string, lineId?: string): PlayerLine | undefined {
-    const candidates = this.lines.filter(
-      (line) =>
-        !line.isLoop &&
-        line.stationIds.length === 2 &&
-        line.stationIds.includes(stationId),
-    );
-
-    if (lineId) {
-      return candidates.find((line) => line.id === lineId);
+  beginExtendDrag(lineId: string, extendEnd: ExtendEnd): DragOrigin | null {
+    const line = this.getLine(lineId);
+    if (!line || isClosedLoopRoute(line.stationIds, line.isLoop) || line.stationIds.length < 2) {
+      return null;
     }
 
-    return (
-      candidates.find((line) => line.id === this.activeLineId) ?? candidates[0]
-    );
-  }
+    const fromStationId =
+      extendEnd === "head"
+        ? line.stationIds[0]
+        : line.stationIds[line.stationIds.length - 1];
+    if (!fromStationId) return null;
 
-  beginSegmentPullDrag(line: PlayerLine): DragOrigin {
-    this.activeLineId = line.id;
+    this.activeLineId = lineId;
     return {
-      lineId: line.id,
-      fromStationId: line.stationIds[0],
+      lineId,
+      fromStationId,
       addedOnDragStart: false,
-      mode: "insert",
-      insertAfterIndex: 0,
+      mode: "extend",
+      extendEnd,
     };
   }
 
   beginDragFromStation(stationId: string, lineId?: string): DragOrigin | null {
-    const twoNodeLine = this.getTwoNodeLineAtStation(stationId, lineId);
-    if (twoNodeLine) {
-      return this.beginSegmentPullDrag(twoNodeLine);
-    }
-
     const extendable = lineId
       ? this.getExtendableLinesAtStation(stationId).find((line) => line.id === lineId)
       : undefined;
@@ -252,7 +245,7 @@ export class GameState {
 
   beginInsertDrag(lineId: string, segmentIndex: number): DragOrigin | null {
     const line = this.getLine(lineId);
-    if (!line || line.stationIds.length < 2) return null;
+    if (!line || line.stationIds.length < 2 || isTwoNodeOpenLine(line)) return null;
 
     const fromStationId = line.stationIds[segmentIndex];
     if (!fromStationId) return null;
@@ -269,7 +262,7 @@ export class GameState {
 
   beginUnloopDrag(lineId: string): DragOrigin | null {
     const line = this.getLine(lineId);
-    if (!line?.isLoop || !line.loopHandleStationId) return null;
+    if (!line?.loopHandleStationId || !isClosedLoopRoute(line.stationIds, line.isLoop)) return null;
 
     this.activeLineId = lineId;
     return {
@@ -282,7 +275,7 @@ export class GameState {
 
   private segmentEndIndex(line: PlayerLine, segmentIndex: number): number {
     if (segmentIndex < line.stationIds.length - 1) return segmentIndex + 1;
-    return line.isLoop ? 0 : -1;
+    return isClosedLoopRoute(line.stationIds, line.isLoop) ? 0 : -1;
   }
 
   canConnectDragTarget(origin: DragOrigin, targetStationId: string): boolean {
@@ -291,7 +284,7 @@ export class GameState {
 
     const line = this.getLine(origin.lineId);
     if (!line) return false;
-    if (line.isLoop && origin.mode !== "insert") return false;
+    if (isClosedLoopRoute(line.stationIds, line.isLoop) && origin.mode !== "insert") return false;
 
     if (origin.mode === "insert" && origin.insertAfterIndex !== undefined) {
       const endIndex = this.segmentEndIndex(line, origin.insertAfterIndex);
@@ -324,6 +317,25 @@ export class GameState {
     }
 
     return !stationIds.includes(targetStationId);
+  }
+
+  /** True when connecting would close an open line into a loop (tail→head or head→tail). */
+  wouldCloseLoopOnConnect(origin: DragOrigin, targetStationId: string): boolean {
+    if (origin.mode === "insert" || origin.mode === "unloop" || origin.mode === "new") {
+      return false;
+    }
+
+    const line = this.getLine(origin.lineId);
+    if (!line || isClosedLoopRoute(line.stationIds, line.isLoop)) return false;
+
+    const { stationIds } = line;
+    if (stationIds.length < 3) return false;
+
+    const extendEnd = origin.extendEnd ?? "tail";
+    if (extendEnd === "head") {
+      return targetStationId === stationIds[stationIds.length - 1];
+    }
+    return targetStationId === stationIds[0];
   }
 
   connectDragTarget(origin: DragOrigin, targetStationId: string): boolean {
@@ -377,7 +389,7 @@ export class GameState {
 
   unloopLine(lineId: string): boolean {
     const line = this.getLine(lineId);
-    if (!line?.isLoop || !line.loopHandleStationId) return false;
+    if (!line?.loopHandleStationId || !isClosedLoopRoute(line.stationIds, line.isLoop)) return false;
 
     const junction = line.loopHandleStationId;
     line.isLoop = false;
@@ -388,7 +400,7 @@ export class GameState {
 
   prependStation(stationId: string): boolean {
     const line = this.getActiveLine();
-    if (line.isLoop) return false;
+    if (isClosedLoopRoute(line.stationIds, line.isLoop)) return false;
 
     const { stationIds } = line;
     if (stationIds.length === 0) {
@@ -416,7 +428,7 @@ export class GameState {
 
   addStation(stationId: string): boolean {
     const line = this.getActiveLine();
-    if (line.isLoop) return false;
+    if (isClosedLoopRoute(line.stationIds, line.isLoop)) return false;
 
     const { stationIds } = line;
     if (stationIds.length === 0) {
@@ -463,6 +475,10 @@ export class GameState {
   }
 
   syncActiveRoute(line: PlayerLine): void {
+    if (line.stationIds.length < 3) {
+      line.isLoop = false;
+      line.loopHandleStationId = undefined;
+    }
     line.activeStationIds = [...line.stationIds];
     line.activeIsLoop = line.isLoop;
     line.activeLoopHandleStationId = line.loopHandleStationId;
@@ -505,7 +521,7 @@ export class GameState {
 
     const junction = pickJunctionForStationRemoval(line, stationId);
 
-    if (line.isLoop) {
+    if (isClosedLoopRoute(line.stationIds, line.isLoop)) {
       line.isLoop = false;
       line.loopHandleStationId = undefined;
     }
@@ -535,7 +551,7 @@ export class GameState {
 
   undoLastStation(lineId?: string): boolean {
     const line = this.lines.find((entry) => entry.id === (lineId ?? this.activeLineId));
-    if (!line || line.isLoop || line.stationIds.length === 0) return false;
+    if (!line || isClosedLoopRoute(line.stationIds, line.isLoop) || line.stationIds.length === 0) return false;
     line.stationIds.pop();
     this.syncActiveRoute(line);
     return true;
@@ -543,7 +559,7 @@ export class GameState {
 
   getLineStatus(line: PlayerLine): string {
     if (this.hasPendingRoute(line)) return "Change pending at next stop";
-    if (line.isLoop) return "Loop — drag the tail to open";
+    if (isClosedLoopRoute(line.stationIds, line.isLoop)) return "Loop — drag the tail to open";
     if (line.stationIds.length === 0) return "Drag from a station to start";
     if (line.stationIds.length === 1) return "1 station";
     return `${line.stationIds.length} stations`;
