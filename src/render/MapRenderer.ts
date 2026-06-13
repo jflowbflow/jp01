@@ -1,5 +1,5 @@
 import { GameState, type DragOrigin } from "../game/GameState.ts";
-import { buildPendingSegments, diffRemovedActiveSegments, isClosedLoopRoute, isTrainOccupyingSegment, isTrainOnAffectedSegments, routePathForStations } from "../game/pendingRoute.ts";
+import { buildPendingSegments, diffRemovedActiveSegments, isClosedLoopRoute, isTrainOccupyingSegment, isTrainOnAffectedSegments, isTwoNodeOpenLine, routePathForStations } from "../game/pendingRoute.ts";
 import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
 import { mapScale, stationRadius } from "../game/stationSpawner.ts";
@@ -34,6 +34,8 @@ type DragState = {
   x: number;
   y: number;
   snapTargetId: string | null;
+  /** Suppress preview until pointer moves away after auto-anchor chain. */
+  chainAnchor?: Point;
 };
 
 type BounceState = {
@@ -231,6 +233,25 @@ export class MapRenderer {
     }
 
     return closest;
+  }
+
+  private nearestOpenLineEndpoint(
+    lineId: string,
+    clientX: number,
+    clientY: number,
+  ): "head" | "tail" | null {
+    const line = this.game.getLine(lineId);
+    if (!line || !isTwoNodeOpenLine(line)) return null;
+
+    const stationMap = this.getStationMap();
+    const point = this.clientToWorld(clientX, clientY);
+    const head = stationMap.get(line.stationIds[0]);
+    const tail = stationMap.get(line.stationIds[1]);
+    if (!head || !tail) return null;
+
+    const headDistance = Math.hypot(head.x - point.x, head.y - point.y);
+    const tailDistance = Math.hypot(tail.x - point.x, tail.y - point.y);
+    return headDistance <= tailDistance ? "head" : "tail";
   }
 
   private isInteracting(): boolean {
@@ -507,6 +528,7 @@ export class MapRenderer {
 
     for (const line of this.game.getLines()) {
       if (line.stationIds.length < 2) continue;
+      if (isTwoNodeOpenLine(line)) continue;
 
       const closed = isClosedLoopRoute(line.stationIds, line.isLoop);
       const segmentCount = closed
@@ -799,6 +821,14 @@ export class MapRenderer {
       const line = this.game.getLine(drag.origin.lineId);
       if (!line) return;
 
+      if (drag.chainAnchor) {
+        const moved = Math.hypot(
+          drag.x - drag.chainAnchor.x,
+          drag.y - drag.chainAnchor.y,
+        );
+        if (moved < DRAG_START_PX) return;
+      }
+
       lineColor = line.color;
       dashed = !drag.snapTargetId;
 
@@ -873,7 +903,9 @@ export class MapRenderer {
         const fromPoint =
           bounce.origin.mode === "unloop"
             ? (this.getLoopHandleTip(bounce.lineId) ?? station)
-            : station;
+            : bounce.origin.mode === "extend" && bounce.origin.extendEnd
+              ? (this.getExtendHandleTip(bounce.lineId, bounce.origin.extendEnd) ?? station)
+              : station;
 
         legs.push([fromPoint, hinge]);
       }
@@ -918,9 +950,6 @@ export class MapRenderer {
     if (!this.drag?.snapTargetId) return;
 
     const { origin, snapTargetId, pointerId } = this.drag;
-    const lineBefore = this.game.getLine(origin.lineId);
-    const completesFirstSegment =
-      origin.mode === "new" || (lineBefore?.stationIds.length ?? 0) === 1;
 
     if (!this.game.connectDragTarget(origin, snapTargetId)) return;
 
@@ -935,11 +964,7 @@ export class MapRenderer {
       return;
     }
 
-    if (
-      origin.mode === "insert" ||
-      isClosedLoopRoute(line.stationIds, line.isLoop) ||
-      completesFirstSegment
-    ) {
+    if (origin.mode === "insert" || isClosedLoopRoute(line.stationIds, line.isLoop)) {
       this.drag = null;
       this.finishInteractionRefresh();
       return;
@@ -958,6 +983,7 @@ export class MapRenderer {
       x: station.x,
       y: station.y,
       snapTargetId: null,
+      chainAnchor: { x: station.x, y: station.y },
     };
 
     this.activeRoutedLines = this.buildRoutedLines("active");
@@ -1071,6 +1097,23 @@ export class MapRenderer {
     }
 
     if (pending.kind === "segment" && pending.lineId !== undefined && pending.segmentIndex !== undefined) {
+      const line = this.game.getLine(pending.lineId);
+      if (line && isTwoNodeOpenLine(line)) {
+        const extendEnd = this.nearestOpenLineEndpoint(
+          pending.lineId,
+          pending.startClientX,
+          pending.startClientY,
+        );
+        if (extendEnd) {
+          const origin = this.game.beginExtendDrag(pending.lineId, extendEnd);
+          if (!origin) return;
+          const tip = this.getExtendHandleTip(pending.lineId, extendEnd);
+          const point = tip ?? this.clientToWorld(pending.startClientX, pending.startClientY);
+          this.startDrag(origin, pending.pointerId, point.x, point.y);
+          return;
+        }
+      }
+
       const endpoint = this.findExtendableEndpointNear(
         pending.startClientX,
         pending.startClientY,
@@ -1210,6 +1253,28 @@ export class MapRenderer {
     const segmentIndex = segmentEl?.dataset.segmentIndex;
     if (segmentLineId && segmentIndex !== undefined) {
       event.preventDefault();
+      const segmentLine = this.game.getLine(segmentLineId);
+      if (segmentLine && isTwoNodeOpenLine(segmentLine)) {
+        const extendEnd = this.nearestOpenLineEndpoint(
+          segmentLineId,
+          event.clientX,
+          event.clientY,
+        );
+        if (extendEnd) {
+          this.pendingPointer = {
+            kind: "extend",
+            pointerId: event.pointerId,
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            startedAt: performance.now(),
+            lineId: segmentLineId,
+            extendEnd,
+          };
+          this.svg.setPointerCapture(event.pointerId);
+          return;
+        }
+      }
+
       this.pendingPointer = {
         kind: "segment",
         pointerId: event.pointerId,
@@ -1254,7 +1319,15 @@ export class MapRenderer {
           ? hovered.id
           : null;
 
-      this.drag = { ...this.drag, x: point.x, y: point.y, snapTargetId };
+      let chainAnchor = this.drag.chainAnchor;
+      if (chainAnchor) {
+        const moved = Math.hypot(point.x - chainAnchor.x, point.y - chainAnchor.y);
+        if (moved >= DRAG_START_PX) {
+          chainAnchor = undefined;
+        }
+      }
+
+      this.drag = { ...this.drag, x: point.x, y: point.y, snapTargetId, chainAnchor };
       this.drawPreview();
       if (this.drag.origin.mode === "insert") {
         this.drawRoutes();

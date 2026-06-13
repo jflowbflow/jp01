@@ -24,6 +24,17 @@ export function isClosedLoopRoute(
   return isLoop && stationIds.length >= MIN_LOOP_STATIONS;
 }
 
+/** Open lines with only two stations have no interior segment to reroute. */
+export function isTwoNodeOpenLine(line: {
+  stationIds: readonly string[];
+  isLoop: boolean;
+}): boolean {
+  return (
+    line.stationIds.length === 2 &&
+    !isClosedLoopRoute(line.stationIds, line.isLoop)
+  );
+}
+
 export function routePathForStations(
   stations: readonly { x: number; y: number }[],
   isLoop: boolean,

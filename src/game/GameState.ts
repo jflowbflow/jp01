@@ -16,6 +16,7 @@ import {
 import {
   canApplyRouteChangeNow,
   isClosedLoopRoute,
+  isTwoNodeOpenLine,
   pickJunctionForStationRemoval,
   remapTrainToPendingRoute,
 } from "./pendingRoute.ts";
@@ -244,7 +245,7 @@ export class GameState {
 
   beginInsertDrag(lineId: string, segmentIndex: number): DragOrigin | null {
     const line = this.getLine(lineId);
-    if (!line || line.stationIds.length < 2) return null;
+    if (!line || line.stationIds.length < 2 || isTwoNodeOpenLine(line)) return null;
 
     const fromStationId = line.stationIds[segmentIndex];
     if (!fromStationId) return null;
