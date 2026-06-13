@@ -178,6 +178,39 @@ export class MapRenderer {
     return closest;
   }
 
+  private getSegmentEndpointNearPointer(
+    lineId: string,
+    segmentIndex: number,
+    clientX: number,
+    clientY: number,
+  ): string | null {
+    const line = this.game.getLine(lineId);
+    if (!line) return null;
+
+    const fromId = line.stationIds[segmentIndex];
+    const toId =
+      segmentIndex < line.stationIds.length - 1
+        ? line.stationIds[segmentIndex + 1]
+        : line.isLoop
+          ? line.stationIds[0]
+          : undefined;
+    if (!fromId || !toId) return null;
+
+    const stationMap = this.getStationMap();
+    const from = stationMap.get(fromId);
+    const to = stationMap.get(toId);
+    if (!from || !to) return null;
+
+    const point = this.clientToWorld(clientX, clientY);
+    const hitRadius = this.getBaseRadius() + 14;
+    const fromDistance = Math.hypot(from.x - point.x, from.y - point.y);
+    const toDistance = Math.hypot(to.x - point.x, to.y - point.y);
+    const closestDistance = Math.min(fromDistance, toDistance);
+
+    if (closestDistance > hitRadius) return null;
+    return fromDistance <= toDistance ? fromId : toId;
+  }
+
   private isInteracting(): boolean {
     return (
       this.drag !== null ||
@@ -805,8 +838,9 @@ export class MapRenderer {
     pointerId: number,
     clientX: number,
     clientY: number,
+    lineId?: string,
   ): void {
-    const origin = this.game.beginDragFromStation(stationId);
+    const origin = this.game.beginDragFromStation(stationId, lineId);
     if (!origin) return;
 
     const station = this.getStationMap().get(stationId);
@@ -890,6 +924,7 @@ export class MapRenderer {
         pending.pointerId,
         pending.startClientX,
         pending.startClientY,
+        pending.lineId,
       );
     }
   }
@@ -956,6 +991,27 @@ export class MapRenderer {
     const segmentIndex = segmentEl?.dataset.segmentIndex;
     if (segmentLineId && segmentIndex !== undefined) {
       event.preventDefault();
+      const parsedSegmentIndex = Number(segmentIndex);
+      const endpointStationId = this.getSegmentEndpointNearPointer(
+        segmentLineId,
+        parsedSegmentIndex,
+        event.clientX,
+        event.clientY,
+      );
+      if (endpointStationId) {
+        this.pendingPointer = {
+          kind: "station",
+          pointerId: event.pointerId,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          startedAt: performance.now(),
+          stationId: endpointStationId,
+          lineId: segmentLineId,
+        };
+        this.svg.setPointerCapture(event.pointerId);
+        return;
+      }
+
       this.pendingPointer = {
         kind: "segment",
         pointerId: event.pointerId,
@@ -963,7 +1019,7 @@ export class MapRenderer {
         startClientY: event.clientY,
         startedAt: performance.now(),
         lineId: segmentLineId,
-        segmentIndex: Number(segmentIndex),
+        segmentIndex: parsedSegmentIndex,
       };
       this.svg.setPointerCapture(event.pointerId);
       return;
