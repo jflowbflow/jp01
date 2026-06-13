@@ -22,6 +22,8 @@ const LINE_WIDTH = 7;
 const ROUTE_HIT_WIDTH = 22;
 const PASSENGER_SIZE = 4.5;
 const PENDING_ROUTE_OPACITY = 0.32;
+const DRAG_GHOST_OPACITY = 0.38;
+const DRAG_GHOST_SNAP_OPACITY = 0.62;
 const BOUNCE_MS = 220;
 const DRAG_START_PX = 5;
 const UNDO_HOLD_MS = 480;
@@ -261,26 +263,93 @@ export class MapRenderer {
     return undefined;
   }
 
-  private getDragFadeLineId(): string | null {
-    if (this.drag && this.drag.origin.mode !== "new" && !this.drag.snapTargetId) {
-      return this.drag.origin.lineId;
+  private getInsertGhostSegment():
+    | { lineId: string; fromId: string; toId: string }
+    | null {
+    const origin =
+      this.drag?.origin.mode === "insert"
+        ? this.drag.origin
+        : this.bounce?.origin.mode === "insert"
+          ? this.bounce.origin
+          : undefined;
+
+    if (!origin || origin.insertAfterIndex === undefined) {
+      return null;
     }
 
-    if (this.bounce && this.bounce.origin.mode !== "new") {
-      return this.bounce.lineId;
+    const line = this.game.getLine(origin.lineId);
+    if (!line) return null;
+
+    const route = this.game.getActiveRoute(line);
+    const fromId = route.stationIds[origin.insertAfterIndex];
+    if (!fromId) return null;
+
+    let toId: string | undefined;
+    if (origin.insertAfterIndex < route.stationIds.length - 1) {
+      toId = route.stationIds[origin.insertAfterIndex + 1];
+    } else if (route.isLoop) {
+      toId = route.stationIds[0];
     }
 
-    return null;
+    if (!toId) return null;
+
+    return { lineId: line.id, fromId, toId };
+  }
+
+  private drawRouteSegments(
+    parent: SVGGElement,
+    stationIds: string[],
+    isLoop: boolean,
+    color: string,
+    ghostSegment?: { fromId: string; toId: string },
+  ): void {
+    const stationMap = this.getStationMap();
+    const segmentCount = isLoop ? stationIds.length : stationIds.length - 1;
+
+    for (let index = 0; index < segmentCount; index += 1) {
+      const fromId = stationIds[index];
+      const toId =
+        index < stationIds.length - 1 ? stationIds[index + 1] : stationIds[0];
+
+      const from = stationMap.get(fromId);
+      const to = stationMap.get(toId);
+      if (!from || !to) continue;
+
+      const pathD = routeOctilinearOpen([from, to]);
+      if (!pathD) continue;
+
+      const isGhost =
+        ghostSegment !== undefined &&
+        fromId === ghostSegment.fromId &&
+        toId === ghostSegment.toId;
+
+      this.appendRouteTrack(
+        parent,
+        pathD,
+        color,
+        isGhost ? String(DRAG_GHOST_OPACITY) : "0.95",
+      );
+    }
   }
 
   private drawRoutes(): void {
     this.routesGroup.replaceChildren();
-    const fadeLineId = this.getDragFadeLineId();
+    const insertGhost = this.getInsertGhostSegment();
 
     for (const routed of this.activeRoutedLines) {
-      const opacity =
-        fadeLineId === routed.line.id ? String(PENDING_ROUTE_OPACITY) : "0.95";
-      this.appendRouteTrack(this.routesGroup, routed.pathD, routed.line.color, opacity);
+      if (insertGhost && insertGhost.lineId === routed.line.id) {
+        const route = this.game.getActiveRoute(routed.line);
+        this.drawRouteSegments(
+          this.routesGroup,
+          route.stationIds,
+          route.isLoop,
+          routed.line.color,
+          insertGhost,
+        );
+        continue;
+      }
+
+      this.appendRouteTrack(this.routesGroup, routed.pathD, routed.line.color, "0.95");
     }
 
     const stationMap = this.getStationMap();
@@ -517,8 +586,7 @@ export class MapRenderer {
     const stationMap = this.getStationMap();
     let lineColor = this.game.getActiveLine().color;
     const legs: [Point, Point][] = [];
-    let dashed = true;
-    let opacity = "0.8";
+    let opacity = DRAG_GHOST_OPACITY;
 
     const drag = this.drag;
     const bounce = this.bounce;
@@ -528,6 +596,9 @@ export class MapRenderer {
       if (!line) return;
 
       lineColor = line.color;
+      if (drag.snapTargetId) {
+        opacity = DRAG_GHOST_SNAP_OPACITY;
+      }
 
       if (drag.origin.mode === "insert" && drag.origin.insertAfterIndex !== undefined) {
         const fromStation = stationMap.get(drag.origin.fromStationId);
@@ -569,8 +640,7 @@ export class MapRenderer {
       if (!line) return;
 
       lineColor = line.color;
-      dashed = false;
-      opacity = "0.55";
+      opacity = DRAG_GHOST_OPACITY * 0.85;
 
       const elapsed = performance.now() - bounce.startTime;
       const t = Math.min(1, elapsed / BOUNCE_MS);
@@ -614,8 +684,7 @@ export class MapRenderer {
       preview.setAttribute("stroke-width", String(this.getLineWidth()));
       preview.setAttribute("stroke-linecap", "round");
       preview.setAttribute("stroke-linejoin", "round");
-      preview.setAttribute("opacity", opacity);
-      preview.setAttribute("stroke-dasharray", dashed ? "10 8" : "none");
+      preview.setAttribute("opacity", String(opacity));
       preview.setAttribute("pointer-events", "none");
       this.previewGroup.append(preview);
     }
@@ -698,7 +767,7 @@ export class MapRenderer {
     this.svg.setPointerCapture(pointerId);
     this.svg.style.cursor = "grabbing";
     this.drawPreview();
-    if (origin.mode !== "new") {
+    if (origin.mode === "insert") {
       this.drawRoutes();
     }
     this.redrawStations();
@@ -900,7 +969,7 @@ export class MapRenderer {
 
       this.drag = { ...this.drag, x: point.x, y: point.y, snapTargetId };
       this.drawPreview();
-      if (this.drag.origin.mode !== "new") {
+      if (this.drag.origin.mode === "insert") {
         this.drawRoutes();
       }
       if (snapTargetId !== previousSnap) {
@@ -1020,7 +1089,7 @@ export class MapRenderer {
 
       if (this.bounce) {
         this.drawPreview();
-        if (this.bounce.origin.mode !== "new") {
+        if (this.bounce.origin.mode === "insert") {
           this.drawRoutes();
         }
         if (now - this.bounce.startTime >= BOUNCE_MS) {
