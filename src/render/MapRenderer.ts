@@ -201,17 +201,15 @@ export class MapRenderer {
     isLoop: boolean;
     loopHandleStationId?: string;
   } {
-    const active = this.game.getActiveRoute(line);
-    if (
-      this.game.hasPendingRoute(line) &&
-      line.isLoop !== line.activeIsLoop
-    ) {
+    if (line.stationIds.length >= 2) {
       return {
-        ...active,
+        stationIds: line.stationIds,
         isLoop: line.isLoop,
+        loopHandleStationId: line.loopHandleStationId,
       };
     }
-    return active;
+
+    return this.game.getActiveRoute(line);
   }
 
   private buildRoutedLines(kind: "active" | "pending"): RoutedLine[] {
@@ -390,6 +388,7 @@ export class MapRenderer {
     const stationMap = this.getStationMap();
     const draggingSegment = this.getDraggingSegment();
     const fadeDraggedSegment = draggingSegment !== null && this.isTrainOnDraggingSegment();
+    const fadedActiveLineIds = new Set<string>();
 
     for (const routed of this.activeRoutedLines) {
       const line = routed.line;
@@ -400,6 +399,7 @@ export class MapRenderer {
         isTrainOnAffectedSegments(train, line, stationMap);
 
       if (fadeOldSegments) {
+        fadedActiveLineIds.add(line.id);
         const fadedKeys = new Set(
           diffRemovedActiveSegments(line).map((segment) =>
             this.segmentDirectedKey(segment.fromId, segment.toId),
@@ -430,6 +430,7 @@ export class MapRenderer {
     }
 
     for (const line of this.game.getLines()) {
+      if (!fadedActiveLineIds.has(line.id)) continue;
       if (!this.game.hasPendingRoute(line)) continue;
       if (!this.trainSimulation.getTrain(line.id)) continue;
 
