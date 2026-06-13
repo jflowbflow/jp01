@@ -1,5 +1,5 @@
 import { GameState, type DragOrigin } from "../game/GameState.ts";
-import { buildPendingSegments, diffRemovedActiveSegments, isTrainOnAffectedSegments } from "../game/pendingRoute.ts";
+import { buildPendingSegments, diffRemovedActiveSegments, isTrainOnAffectedSegments, isTrainOnRouteSegment } from "../game/pendingRoute.ts";
 import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
 import { mapScale, stationRadius } from "../game/stationSpawner.ts";
@@ -25,6 +25,7 @@ const PENDING_ROUTE_OPACITY = 0.32;
 const PREVIEW_DASH = "10 8";
 const BOUNCE_MS = 220;
 const DRAG_START_PX = 5;
+const HOLD_CANCEL_PX = 22;
 const UNDO_HOLD_MS = 480;
 
 type DragState = {
@@ -302,9 +303,54 @@ export class MapRenderer {
     }
   }
 
+  private getDraggingSegment():
+    | { lineId: string; fromId: string; toId: string }
+    | null {
+    const origin =
+      this.drag?.origin.mode === "insert"
+        ? this.drag.origin
+        : this.bounce?.origin.mode === "insert"
+          ? this.bounce.origin
+          : undefined;
+
+    if (!origin || origin.insertAfterIndex === undefined) {
+      return null;
+    }
+
+    const line = this.game.getLine(origin.lineId);
+    if (!line) return null;
+
+    const fromId = line.stationIds[origin.insertAfterIndex];
+    if (!fromId) return null;
+
+    let toId: string | undefined;
+    if (origin.insertAfterIndex < line.stationIds.length - 1) {
+      toId = line.stationIds[origin.insertAfterIndex + 1];
+    } else if (line.isLoop) {
+      toId = line.stationIds[0];
+    }
+
+    if (!toId) return null;
+
+    return { lineId: line.id, fromId, toId };
+  }
+
+  private isTrainOnDraggingSegment(): boolean {
+    const segment = this.getDraggingSegment();
+    if (!segment) return false;
+
+    const line = this.game.getLine(segment.lineId);
+    const train = this.trainSimulation.getTrain(segment.lineId);
+    if (!line || !train) return false;
+
+    return isTrainOnRouteSegment(train, line, this.getStationMap(), segment);
+  }
+
   private drawRoutes(): void {
     this.routesGroup.replaceChildren();
     const stationMap = this.getStationMap();
+    const draggingSegment = this.getDraggingSegment();
+    const fadeDraggedSegment = draggingSegment !== null && this.isTrainOnDraggingSegment();
 
     for (const routed of this.activeRoutedLines) {
       const line = routed.line;
@@ -320,6 +366,18 @@ export class MapRenderer {
             this.segmentDirectedKey(segment.fromId, segment.toId),
           ),
         );
+        this.drawActiveRouteSegments(this.routesGroup, line, line.color, fadedKeys);
+        continue;
+      }
+
+      if (
+        fadeDraggedSegment &&
+        draggingSegment &&
+        draggingSegment.lineId === line.id
+      ) {
+        const fadedKeys = new Set([
+          this.segmentDirectedKey(draggingSegment.fromId, draggingSegment.toId),
+        ]);
         this.drawActiveRouteSegments(this.routesGroup, line, line.color, fadedKeys);
         continue;
       }
@@ -736,6 +794,9 @@ export class MapRenderer {
     this.svg.setPointerCapture(pointerId);
     this.svg.style.cursor = "grabbing";
     this.drawPreview();
+    if (origin.mode === "insert") {
+      this.drawRoutes();
+    }
     this.redrawStations();
   }
 
@@ -843,25 +904,31 @@ export class MapRenderer {
     );
     const elapsed = performance.now() - pending.startedAt;
 
-    if (moved > DRAG_START_PX) {
-      this.pendingPointer = null;
-      this.clearUndoHold();
-      this.startPendingDrag(pending);
-      return;
-    }
-
     if (pending.kind === "station" && pending.stationId) {
       const canRemove = this.game.getRemovableLinesAtStation(pending.stationId).length > 0;
+
       if (canRemove) {
         this.undoHoldStationId = pending.stationId;
         this.undoHoldProgress = Math.min(1, elapsed / UNDO_HOLD_MS);
         this.redrawStations();
-      }
 
-      if (elapsed >= UNDO_HOLD_MS && canRemove) {
-        this.pendingPointer = null;
-        this.tryRemoveHold(pending.stationId);
+        if (elapsed >= UNDO_HOLD_MS) {
+          this.pendingPointer = null;
+          this.tryRemoveHold(pending.stationId);
+          return;
+        }
+
+        if (moved < HOLD_CANCEL_PX) {
+          return;
+        }
+
+        this.clearUndoHold();
       }
+    }
+
+    if (moved > DRAG_START_PX) {
+      this.pendingPointer = null;
+      this.startPendingDrag(pending);
     }
   }
 
@@ -935,6 +1002,9 @@ export class MapRenderer {
 
       this.drag = { ...this.drag, x: point.x, y: point.y, snapTargetId };
       this.drawPreview();
+      if (this.drag.origin.mode === "insert") {
+        this.drawRoutes();
+      }
       if (snapTargetId !== previousSnap) {
         this.redrawStations();
         if (snapTargetId) this.tryAutoAnchor();
@@ -1052,6 +1122,9 @@ export class MapRenderer {
 
       if (this.bounce) {
         this.drawPreview();
+        if (this.bounce.origin.mode === "insert") {
+          this.drawRoutes();
+        }
         if (now - this.bounce.startTime >= BOUNCE_MS) {
           this.game.cancelDrag(this.bounce.origin);
           this.bounce = null;

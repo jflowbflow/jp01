@@ -163,7 +163,40 @@ export class GameState {
     return this.lines.find((line) => line.stationIds.length === 0);
   }
 
+  getTwoNodeLineAtStation(stationId: string, lineId?: string): PlayerLine | undefined {
+    const candidates = this.lines.filter(
+      (line) =>
+        !line.isLoop &&
+        line.stationIds.length === 2 &&
+        line.stationIds.includes(stationId),
+    );
+
+    if (lineId) {
+      return candidates.find((line) => line.id === lineId);
+    }
+
+    return (
+      candidates.find((line) => line.id === this.activeLineId) ?? candidates[0]
+    );
+  }
+
+  beginSegmentPullDrag(line: PlayerLine): DragOrigin {
+    this.activeLineId = line.id;
+    return {
+      lineId: line.id,
+      fromStationId: line.stationIds[0],
+      addedOnDragStart: false,
+      mode: "insert",
+      insertAfterIndex: 0,
+    };
+  }
+
   beginDragFromStation(stationId: string, lineId?: string): DragOrigin | null {
+    const twoNodeLine = this.getTwoNodeLineAtStation(stationId, lineId);
+    if (twoNodeLine) {
+      return this.beginSegmentPullDrag(twoNodeLine);
+    }
+
     const extendable = lineId
       ? this.getExtendableLinesAtStation(stationId).find((line) => line.id === lineId)
       : undefined;
