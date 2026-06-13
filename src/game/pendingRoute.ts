@@ -180,13 +180,13 @@ function distanceOnSegment(
   return distance >= from - SEGMENT_MARGIN || distance <= to + SEGMENT_MARGIN;
 }
 
-export function isTrainOnRouteSegment(
+function trainOnRouteSegmentStops(
   train: Train,
   line: PlayerLine,
   stationMap: Map<string, Station>,
   segment: RouteSegment,
-): boolean {
-  if (line.activeStationIds.length < 2) return false;
+): { fromStop: { distance: number }; toStop: { distance: number }; atStationId: string | null } | null {
+  if (line.activeStationIds.length < 2) return null;
 
   const activeStations = line.activeStationIds
     .map((id) => stationMap.get(id))
@@ -196,17 +196,53 @@ export function isTrainOnRouteSegment(
     ? routeOctilinear(activeStations)
     : routeOctilinearOpen(activeStations);
 
-  if (!pathD) return false;
-
-  const totalLength = pathTotalLength(pathD);
-  if (totalLength === 0) return false;
+  if (!pathD || pathTotalLength(pathD) === 0) return null;
 
   const stops = stationStopsOnPath(pathD, activeStations);
   const fromStop = stops.find((stop) => stop.stationId === segment.fromId);
   const toStop = stops.find((stop) => stop.stationId === segment.toId);
-  if (!fromStop || !toStop) return false;
+  if (!fromStop || !toStop) return null;
 
-  const atStationId = getTrainAtStationId(train, stops);
+  return {
+    fromStop,
+    toStop,
+    atStationId: getTrainAtStationId(train, stops),
+  };
+}
+
+/** Includes trains dwelling at either endpoint — used for drag-time ghost visuals. */
+export function isTrainOccupyingSegment(
+  train: Train,
+  line: PlayerLine,
+  stationMap: Map<string, Station>,
+  segment: RouteSegment,
+): boolean {
+  const placement = trainOnRouteSegmentStops(train, line, stationMap, segment);
+  if (!placement) return false;
+
+  const { fromStop, toStop, atStationId } = placement;
+  if (atStationId === segment.fromId || atStationId === segment.toId) {
+    return true;
+  }
+
+  return distanceOnSegment(
+    train.distance,
+    fromStop.distance,
+    toStop.distance,
+    line.activeIsLoop,
+  );
+}
+
+export function isTrainOnRouteSegment(
+  train: Train,
+  line: PlayerLine,
+  stationMap: Map<string, Station>,
+  segment: RouteSegment,
+): boolean {
+  const placement = trainOnRouteSegmentStops(train, line, stationMap, segment);
+  if (!placement) return false;
+
+  const { fromStop, toStop, atStationId } = placement;
   if (atStationId === segment.fromId || atStationId === segment.toId) {
     return false;
   }
