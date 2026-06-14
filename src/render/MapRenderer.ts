@@ -305,6 +305,7 @@ export class MapRenderer {
     line: PlayerLine,
     color: string,
     fadedSegmentKeys: Set<string>,
+    hiddenSegmentKeys = new Set<string>(),
   ): void {
     const route = this.game.getActiveRoute(line);
     const stationMap = this.getStationMap();
@@ -326,7 +327,10 @@ export class MapRenderer {
       const pathD = routeOctilinearOpen([from, to]);
       if (!pathD) continue;
 
-      const faded = fadedSegmentKeys.has(this.segmentDirectedKey(fromId, toId));
+      const segmentKey = this.segmentDirectedKey(fromId, toId);
+      if (hiddenSegmentKeys.has(segmentKey)) continue;
+
+      const faded = fadedSegmentKeys.has(segmentKey);
       this.appendRouteTrack(
         parent,
         pathD,
@@ -394,12 +398,26 @@ export class MapRenderer {
         isTrainOnAffectedSegments(train, line, stationMap);
 
       if (fadeOldSegments) {
-        const fadedKeys = new Set(
-          diffRemovedActiveSegments(line).map((segment) =>
+        const removedSegments = diffRemovedActiveSegments(line);
+        const removedKeys = new Set(
+          removedSegments.map((segment) =>
             this.segmentDirectedKey(segment.fromId, segment.toId),
           ),
         );
-        this.drawActiveRouteSegments(this.routesGroup, line, line.color, fadedKeys);
+        const hideRemovedKeys =
+          !line.activeIsLoop && line.activeStationIds.length === 2
+            ? removedKeys
+            : new Set<string>();
+        const fadedKeys = new Set(
+          [...removedKeys].filter((key) => !hideRemovedKeys.has(key)),
+        );
+        this.drawActiveRouteSegments(
+          this.routesGroup,
+          line,
+          line.color,
+          fadedKeys,
+          hideRemovedKeys,
+        );
         continue;
       }
 
@@ -408,10 +426,24 @@ export class MapRenderer {
         draggingSegment &&
         draggingSegment.lineId === line.id
       ) {
-        const fadedKeys = new Set([
-          this.segmentDirectedKey(draggingSegment.fromId, draggingSegment.toId),
-        ]);
-        this.drawActiveRouteSegments(this.routesGroup, line, line.color, fadedKeys);
+        const draggedKey = this.segmentDirectedKey(
+          draggingSegment.fromId,
+          draggingSegment.toId,
+        );
+        const hideDraggedKeys =
+          !line.isLoop && line.stationIds.length === 2
+            ? new Set([draggedKey])
+            : new Set<string>();
+        const fadedKeys = hideDraggedKeys.has(draggedKey)
+          ? new Set<string>()
+          : new Set([draggedKey]);
+        this.drawActiveRouteSegments(
+          this.routesGroup,
+          line,
+          line.color,
+          fadedKeys,
+          hideDraggedKeys,
+        );
         continue;
       }
 
