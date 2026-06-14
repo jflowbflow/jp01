@@ -38,6 +38,8 @@ type ActiveRoute = {
   loopHandleStationId?: string;
 };
 
+const MIN_LOOP_STATIONS = 3;
+
 export class GameState {
   private readonly lines: PlayerLine[];
   private activeLineId: string;
@@ -65,12 +67,29 @@ export class GameState {
     }
   }
 
+  private normalizeLineLoopState(line: PlayerLine): void {
+    if (line.stationIds.length < MIN_LOOP_STATIONS) {
+      line.isLoop = false;
+      line.loopHandleStationId = undefined;
+    }
+
+    if (line.activeStationIds.length < MIN_LOOP_STATIONS) {
+      line.activeIsLoop = false;
+      line.activeLoopHandleStationId = undefined;
+    }
+  }
+
   getLines(): readonly PlayerLine[] {
+    for (const line of this.lines) {
+      this.normalizeLineLoopState(line);
+    }
     return this.lines;
   }
 
   getLine(lineId: string): PlayerLine | undefined {
-    return this.lines.find((line) => line.id === lineId);
+    const line = this.lines.find((entry) => entry.id === lineId);
+    if (line) this.normalizeLineLoopState(line);
+    return line;
   }
 
   getStations(): readonly Station[] {
@@ -108,10 +127,13 @@ export class GameState {
   }
 
   getActiveLine(): PlayerLine {
-    return this.lines.find((line) => line.id === this.activeLineId) ?? this.lines[0];
+    const line = this.lines.find((entry) => entry.id === this.activeLineId) ?? this.lines[0];
+    this.normalizeLineLoopState(line);
+    return line;
   }
 
   getActiveRoute(line: PlayerLine): ActiveRoute {
+    this.normalizeLineLoopState(line);
     return {
       stationIds: line.activeStationIds,
       isLoop: line.activeIsLoop,
@@ -120,6 +142,7 @@ export class GameState {
   }
 
   hasPendingRoute(line: PlayerLine): boolean {
+    this.normalizeLineLoopState(line);
     return (
       line.pendingApplyStationId !== undefined ||
       line.stationIds.join() !== line.activeStationIds.join() ||
@@ -145,6 +168,7 @@ export class GameState {
   }
 
   private getExtendEnd(line: PlayerLine, stationId: string): ExtendEnd | null {
+    this.normalizeLineLoopState(line);
     if (line.isLoop || line.stationIds.length === 0) return null;
     if (line.stationIds[line.stationIds.length - 1] === stationId) return "tail";
     if (line.stationIds[0] === stationId) return "head";
@@ -277,7 +301,7 @@ export class GameState {
 
       const lastId = stationIds[stationIds.length - 1];
       if (targetStationId === lastId) {
-        return stationIds.length >= 3;
+        return stationIds.length >= MIN_LOOP_STATIONS;
       }
 
       return !stationIds.includes(targetStationId);
@@ -287,7 +311,7 @@ export class GameState {
 
     const firstId = stationIds[0];
     if (targetStationId === firstId) {
-      return stationIds.length >= 3;
+      return stationIds.length >= MIN_LOOP_STATIONS;
     }
 
     return !stationIds.includes(targetStationId);
@@ -369,7 +393,7 @@ export class GameState {
 
     const lastId = stationIds[stationIds.length - 1];
     if (stationId === lastId) {
-      if (stationIds.length < 3) return false;
+      if (stationIds.length < MIN_LOOP_STATIONS) return false;
       line.isLoop = true;
       line.loopHandleStationId = firstId;
       return true;
@@ -397,7 +421,7 @@ export class GameState {
 
     const firstId = stationIds[0];
     if (stationId === firstId) {
-      if (stationIds.length < 3) return false;
+      if (stationIds.length < MIN_LOOP_STATIONS) return false;
       line.isLoop = true;
       line.loopHandleStationId = firstId;
       return true;
@@ -412,6 +436,7 @@ export class GameState {
   queueRouteChange(lineId: string, junctionStationId: string): void {
     const line = this.getLine(lineId);
     if (!line) return;
+    this.normalizeLineLoopState(line);
 
     if (line.activeStationIds.length < 2) {
       this.syncActiveRoute(line);
@@ -430,9 +455,12 @@ export class GameState {
   }
 
   syncActiveRoute(line: PlayerLine): void {
+    this.normalizeLineLoopState(line);
     line.activeStationIds = [...line.stationIds];
     line.activeIsLoop = line.isLoop;
-    line.activeLoopHandleStationId = line.loopHandleStationId;
+    line.activeLoopHandleStationId = line.isLoop
+      ? line.loopHandleStationId
+      : undefined;
     line.pendingApplyStationId = undefined;
   }
 
@@ -502,6 +530,7 @@ export class GameState {
 
   undoLastStation(lineId?: string): boolean {
     const line = this.lines.find((entry) => entry.id === (lineId ?? this.activeLineId));
+    if (line) this.normalizeLineLoopState(line);
     if (!line || line.isLoop || line.stationIds.length === 0) return false;
     line.stationIds.pop();
     this.syncActiveRoute(line);
@@ -509,6 +538,7 @@ export class GameState {
   }
 
   getLineStatus(line: PlayerLine): string {
+    this.normalizeLineLoopState(line);
     if (this.hasPendingRoute(line)) return "Change pending at next stop";
     if (line.isLoop) return "Loop — drag the tail to open";
     if (line.stationIds.length === 0) return "Drag from a station to start";
