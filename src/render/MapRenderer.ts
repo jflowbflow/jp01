@@ -387,7 +387,16 @@ export class MapRenderer {
     this.routesGroup.replaceChildren();
     const stationMap = this.getStationMap();
     const draggingSegment = this.getDraggingSegment();
-    const fadeDraggedSegment = draggingSegment !== null && this.isTrainOnDraggingSegment();
+    const draggingLine = draggingSegment
+      ? this.game.getLine(draggingSegment.lineId)
+      : undefined;
+    const hideDraggedSegment =
+      draggingLine !== undefined &&
+      !draggingLine.isLoop &&
+      draggingLine.stationIds.length === 2;
+    const fadeDraggedSegment =
+      draggingSegment !== null &&
+      (hideDraggedSegment || this.isTrainOnDraggingSegment());
 
     for (const routed of this.activeRoutedLines) {
       const line = routed.line;
