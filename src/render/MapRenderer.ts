@@ -844,6 +844,7 @@ export class MapRenderer {
   }
 
   private afterRouteChange(lineId: string): void {
+    if (this.isInteracting()) return;
     this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
   }
 
@@ -1275,7 +1276,9 @@ export class MapRenderer {
         (line) => line.activeStationIds.length >= 2,
       );
       if (hasActiveRoutes) {
-        trainUpdate = this.trainSimulation.update(dt, this.game);
+        trainUpdate = this.trainSimulation.update(dt, this.game, {
+          applyPendingRoutes: !this.isInteracting(),
+        });
         this.activeRoutedLines = this.buildRoutedLines("active");
         if (
           trainUpdate.routeApplied ||

@@ -55,7 +55,12 @@ export class TrainSimulation {
     return isTrainOnAffectedSegments(train, line, stationMap);
   }
 
-  update(dt: number, game: GameState): { passengersChanged: boolean; routeApplied: boolean } {
+  update(
+    dt: number,
+    game: GameState,
+    options: { applyPendingRoutes?: boolean } = {},
+  ): { passengersChanged: boolean; routeApplied: boolean } {
+    const applyPendingRoutes = options.applyPendingRoutes ?? true;
     let passengersChanged = false;
     let routeApplied = false;
 
@@ -88,7 +93,11 @@ export class TrainSimulation {
       const atStationId = getTrainAtStationOnLine(train, line, stationMap);
       const stoppedAtStation = atStationId !== null || train.dwellRemaining > 0;
 
-      if (stoppedAtStation && game.tryApplyPendingRoute(line.id, train)) {
+      if (
+        applyPendingRoutes &&
+        stoppedAtStation &&
+        game.tryApplyPendingRoute(line.id, train)
+      ) {
         routeApplied = true;
         const updatedRoute = game.getActiveRoute(line);
         const updatedStations = updatedRoute.stationIds
@@ -122,7 +131,7 @@ export class TrainSimulation {
 
       if (crossed) {
         train.distance = crossed.distance;
-        if (game.tryApplyPendingRoute(line.id, train)) {
+        if (applyPendingRoutes && game.tryApplyPendingRoute(line.id, train)) {
           routeApplied = true;
           const updatedRoute = game.getActiveRoute(line);
           const updatedStations = updatedRoute.stationIds
