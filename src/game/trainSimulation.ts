@@ -253,9 +253,15 @@ export class TrainSimulation {
       if (!this.canVisitStation(train, stop, totalLength, isLoop)) return false;
 
       if (isLoop) {
-        const forward = this.forwardDelta(from, to, totalLength);
-        const stopDelta = this.forwardDelta(from, stop.distance, totalLength);
-        return stopDelta > 0 && stopDelta <= forward + 0.5;
+        const travelDelta =
+          train.direction > 0
+            ? this.forwardDelta(from, to, totalLength)
+            : this.backwardDelta(from, to, totalLength);
+        const stopDelta =
+          train.direction > 0
+            ? this.forwardDelta(from, stop.distance, totalLength)
+            : this.backwardDelta(from, stop.distance, totalLength);
+        return stopDelta > 0 && stopDelta <= travelDelta + 0.5;
       }
 
       if (train.direction > 0) {
@@ -267,15 +273,31 @@ export class TrainSimulation {
 
     if (candidates.length === 0) return null;
 
-    candidates.sort((a, b) =>
-      train.direction > 0 ? a.distance - b.distance : b.distance - a.distance,
-    );
+    candidates.sort((a, b) => {
+      if (!isLoop) {
+        return train.direction > 0 ? a.distance - b.distance : b.distance - a.distance;
+      }
+
+      const deltaA =
+        train.direction > 0
+          ? this.forwardDelta(from, a.distance, totalLength)
+          : this.backwardDelta(from, a.distance, totalLength);
+      const deltaB =
+        train.direction > 0
+          ? this.forwardDelta(from, b.distance, totalLength)
+          : this.backwardDelta(from, b.distance, totalLength);
+      return deltaA - deltaB;
+    });
 
     return candidates[0];
   }
 
   private forwardDelta(from: number, to: number, total: number): number {
     return ((to - from) % total + total) % total;
+  }
+
+  private backwardDelta(from: number, to: number, total: number): number {
+    return ((from - to) % total + total) % total;
   }
 
   private handleStationStop(

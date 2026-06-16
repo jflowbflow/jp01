@@ -798,6 +798,41 @@ export class MapRenderer {
     this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
   }
 
+  private tryConvertUnloopDragToLineDrag(point: Point): boolean {
+    const drag = this.drag;
+    if (!drag || drag.origin.mode !== "unloop") return false;
+
+    const station = this.getStationMap().get(drag.origin.fromStationId);
+    if (!station) return false;
+
+    const releaseRadius = Math.max(10, this.getBaseRadius());
+    if (Math.hypot(point.x - station.x, point.y - station.y) > releaseRadius) {
+      return false;
+    }
+
+    if (!this.game.unloopLine(drag.origin.lineId)) return false;
+
+    const nextOrigin = this.game.beginDragFromStation(
+      drag.origin.fromStationId,
+      drag.origin.lineId,
+    );
+    if (!nextOrigin) return false;
+
+    this.drag = {
+      ...drag,
+      origin: nextOrigin,
+      x: point.x,
+      y: point.y,
+      snapTargetId: null,
+    };
+
+    this.activeRoutedLines = this.buildRoutedLines("active");
+    this.drawRoutes();
+    this.drawPreview();
+    this.redrawStations();
+    return true;
+  }
+
   private tryAutoAnchor(): void {
     if (!this.drag?.snapTargetId) return;
 
@@ -1080,6 +1115,8 @@ export class MapRenderer {
   private onPointerMove = (event: PointerEvent): void => {
     if (this.drag && event.pointerId === this.drag.pointerId) {
       const point = this.clientToWorld(event.clientX, event.clientY);
+      this.tryConvertUnloopDragToLineDrag(point);
+
       const hovered = this.findStationAt(event.clientX, event.clientY);
       const previousSnap = this.drag.snapTargetId;
       const snapTargetId =
@@ -1127,13 +1164,6 @@ export class MapRenderer {
     this.drag = null;
     this.svg.releasePointerCapture(event.pointerId);
     this.svg.style.cursor = "";
-
-    if (origin.mode === "unloop") {
-      this.game.unloopLine(origin.lineId);
-      this.afterRouteChange(origin.lineId);
-      this.finishInteractionRefresh();
-      return;
-    }
 
     if (snapTargetId && this.game.connectDragTarget(origin, snapTargetId)) {
       this.afterRouteChange(origin.lineId);
