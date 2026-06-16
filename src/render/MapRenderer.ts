@@ -881,6 +881,24 @@ export class MapRenderer {
     this.startDrag(origin, pointerId, point.x, point.y);
   }
 
+  private startLoopHandleDrag(
+    lineId: string,
+    pointerId: number,
+    clientX: number,
+    clientY: number,
+  ): boolean {
+    const tip = this.getLoopHandleTip(lineId);
+    const origin = this.game.beginUnloopDrag(lineId);
+    if (!origin) return false;
+
+    const point = tip ?? this.clientToWorld(clientX, clientY);
+    this.startDrag(origin, pointerId, point.x, point.y);
+    this.activeRoutedLines = this.buildRoutedLines("active");
+    this.drawRoutes();
+    this.drawLoopHandles();
+    return true;
+  }
+
   private showRemovePicker(stationId: string, lines: PlayerLine[]): void {
     this.removePicker = { stationId, lines };
     this.pickerEl.hidden = false;
@@ -943,13 +961,12 @@ export class MapRenderer {
     }
 
     if (pending.kind === "handle" && pending.lineId) {
-      const tip = this.getLoopHandleTip(pending.lineId);
-      const origin = this.game.beginUnloopDrag(pending.lineId);
-      if (!origin) return;
-      const point = tip ?? this.clientToWorld(pending.startClientX, pending.startClientY);
-      this.startDrag(origin, pending.pointerId, point.x, point.y);
-      this.activeRoutedLines = this.buildRoutedLines("active");
-      this.drawRoutes();
+      this.startLoopHandleDrag(
+        pending.lineId,
+        pending.pointerId,
+        pending.startClientX,
+        pending.startClientY,
+      );
       return;
     }
 
@@ -1009,15 +1026,12 @@ export class MapRenderer {
     const loopHandleLineId = target.closest<SVGElement>("[data-loop-handle]")?.dataset.loopHandle;
     if (loopHandleLineId) {
       event.preventDefault();
-      this.pendingPointer = {
-        kind: "handle",
-        pointerId: event.pointerId,
-        startClientX: event.clientX,
-        startClientY: event.clientY,
-        startedAt: performance.now(),
-        lineId: loopHandleLineId,
-      };
-      this.svg.setPointerCapture(event.pointerId);
+      this.startLoopHandleDrag(
+        loopHandleLineId,
+        event.pointerId,
+        event.clientX,
+        event.clientY,
+      );
       return;
     }
 
