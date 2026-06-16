@@ -5,8 +5,8 @@ export const MAP_HEIGHT = 560;
 export const MAP_PADDING = 55;
 
 export const lineDefinitions: LineDefinition[] = [
-  { id: "line-a", name: "Orange Line", color: "#f28c28" },
-  { id: "line-b", name: "Blue Line", color: "#4ea5ff" },
+  { id: "line-a", name: "Blue Line", color: "#4ea5ff" },
+  { id: "line-b", name: "Orange Line", color: "#f28c28" },
   { id: "line-c", name: "Green Line", color: "#5ec269" },
 ];
 
