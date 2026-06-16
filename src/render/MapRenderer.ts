@@ -300,6 +300,17 @@ export class MapRenderer {
     return `${fromId}>${toId}`;
   }
 
+  private isTwoNodeSegmentReshape(line: PlayerLine): boolean {
+    return (
+      !line.activeIsLoop &&
+      !line.isLoop &&
+      line.activeStationIds.length === 2 &&
+      line.stationIds.length > 2 &&
+      line.stationIds[0] === line.activeStationIds[0] &&
+      line.stationIds[line.stationIds.length - 1] === line.activeStationIds[1]
+    );
+  }
+
   private drawActiveRouteSegments(
     parent: SVGGElement,
     line: PlayerLine,
@@ -401,6 +412,14 @@ export class MapRenderer {
     for (const routed of this.activeRoutedLines) {
       const line = routed.line;
       const train = this.trainSimulation.getTrain(line.id);
+      if (
+        train !== undefined &&
+        this.game.hasPendingRoute(line) &&
+        this.isTwoNodeSegmentReshape(line)
+      ) {
+        continue;
+      }
+
       const fadeOldSegments =
         train !== undefined &&
         this.game.hasPendingRoute(line) &&
@@ -462,6 +481,17 @@ export class MapRenderer {
     for (const line of this.game.getLines()) {
       if (!this.game.hasPendingRoute(line)) continue;
       if (!this.trainSimulation.getTrain(line.id)) continue;
+
+      if (this.isTwoNodeSegmentReshape(line)) {
+        const pendingStations = line.stationIds
+          .map((id) => stationMap.get(id))
+          .filter((station): station is Station => Boolean(station));
+        const pathD = routeOctilinearOpen(pendingStations);
+        if (pathD) {
+          this.appendRouteTrack(this.routesGroup, pathD, line.color, "0.95");
+        }
+        continue;
+      }
 
       for (const segment of buildPendingSegments(line, stationMap)) {
         this.appendRouteTrack(this.routesGroup, segment.pathD, line.color, "0.95");
@@ -686,7 +716,7 @@ export class MapRenderer {
 
     const stationMap = this.getStationMap();
     let lineColor = this.game.getActiveLine().color;
-    const legs: [Point, Point][] = [];
+    const previewRoutes: Point[][] = [];
     let dashed = false;
 
     const drag = this.drag;
@@ -712,7 +742,7 @@ export class MapRenderer {
           ? (stationMap.get(drag.snapTargetId) ?? { x: drag.x, y: drag.y })
           : { x: drag.x, y: drag.y };
 
-        legs.push([fromStation, hinge], [hinge, toStation]);
+        previewRoutes.push([fromStation, hinge, toStation]);
       } else {
         let fromPoint: Point | undefined;
 
@@ -729,9 +759,9 @@ export class MapRenderer {
           : undefined;
 
         if (!endPoint) {
-          legs.push([fromPoint, { x: drag.x, y: drag.y }]);
+          previewRoutes.push([fromPoint, { x: drag.x, y: drag.y }]);
         } else {
-          legs.push([fromPoint, endPoint]);
+          previewRoutes.push([fromPoint, endPoint]);
         }
       }
     } else if (bounce) {
@@ -757,7 +787,7 @@ export class MapRenderer {
         );
         if (!fromStation || !toStation) return;
 
-        legs.push([fromStation, hinge], [hinge, toStation]);
+        previewRoutes.push([fromStation, hinge, toStation]);
       } else {
         const station = stationMap.get(bounce.origin.fromStationId);
         if (!station) return;
@@ -767,12 +797,12 @@ export class MapRenderer {
             ? (this.getLoopHandleTip(bounce.lineId) ?? station)
             : station;
 
-        legs.push([fromPoint, hinge]);
+        previewRoutes.push([fromPoint, hinge]);
       }
     }
 
-    for (const [fromPoint, endPoint] of legs) {
-      const pathD = routeOctilinearOpen([fromPoint, endPoint]);
+    for (const routePoints of previewRoutes) {
+      const pathD = routeOctilinearOpen(routePoints);
       if (!pathD) continue;
 
       const preview = document.createElementNS("http://www.w3.org/2000/svg", "path");
