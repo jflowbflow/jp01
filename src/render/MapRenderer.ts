@@ -891,6 +891,12 @@ export class MapRenderer {
     const origin = this.game.beginUnloopDrag(lineId);
     if (!origin) return false;
 
+    const line = this.game.getLine(lineId);
+    const train = this.trainSimulation.getTrain(lineId);
+    if (line && (!train || !isTrainOnAffectedSegments(train, line, this.getStationMap()))) {
+      this.game.finalizeRouteChange(lineId, train);
+    }
+
     const point = tip ?? this.clientToWorld(clientX, clientY);
     this.startDrag(origin, pointerId, point.x, point.y);
     this.activeRoutedLines = this.buildRoutedLines("active");
@@ -1246,6 +1252,9 @@ export class MapRenderer {
           this.drawRoutes();
         }
         this.drawTrains();
+        if (trainUpdate.passengersChanged && !this.isInteracting()) {
+          this.drawPassengers();
+        }
       }
 
       this.animationFrame = requestAnimationFrame(tick);

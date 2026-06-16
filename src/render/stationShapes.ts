@@ -69,12 +69,8 @@ export function createHitArea(x: number, y: number, radius: number): SVGCircleEl
 }
 
 export function passengerOffset(index: number, stationRadius: number): Point {
-  const ring = Math.floor(index / 4);
-  const slot = index % 4;
-  const angle = (-Math.PI / 4) + (Math.PI / 2) * slot;
-  const distance = stationRadius + 10 + ring * 9;
   return {
-    x: Math.cos(angle) * distance,
-    y: Math.sin(angle) * distance + stationRadius * 0.35,
+    x: stationRadius + 12 + index * 9,
+    y: stationRadius * 0.35,
   };
 }
