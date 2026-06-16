@@ -798,41 +798,6 @@ export class MapRenderer {
     this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
   }
 
-  private tryConvertUnloopDragToLineDrag(point: Point): boolean {
-    const drag = this.drag;
-    if (!drag || drag.origin.mode !== "unloop") return false;
-
-    const station = this.getStationMap().get(drag.origin.fromStationId);
-    if (!station) return false;
-
-    const releaseRadius = Math.max(10, this.getBaseRadius());
-    if (Math.hypot(point.x - station.x, point.y - station.y) > releaseRadius) {
-      return false;
-    }
-
-    if (!this.game.unloopLine(drag.origin.lineId)) return false;
-
-    const nextOrigin = this.game.beginDragFromStation(
-      drag.origin.fromStationId,
-      drag.origin.lineId,
-    );
-    if (!nextOrigin) return false;
-
-    this.drag = {
-      ...drag,
-      origin: nextOrigin,
-      x: point.x,
-      y: point.y,
-      snapTargetId: null,
-    };
-
-    this.activeRoutedLines = this.buildRoutedLines("active");
-    this.drawRoutes();
-    this.drawPreview();
-    this.redrawStations();
-    return true;
-  }
-
   private tryAutoAnchor(): void {
     if (!this.drag?.snapTargetId) return;
 
@@ -978,11 +943,13 @@ export class MapRenderer {
     }
 
     if (pending.kind === "handle" && pending.lineId) {
+      const tip = this.getLoopHandleTip(pending.lineId);
       const origin = this.game.beginUnloopDrag(pending.lineId);
       if (!origin) return;
-      const tip = this.getLoopHandleTip(origin.lineId);
       const point = tip ?? this.clientToWorld(pending.startClientX, pending.startClientY);
       this.startDrag(origin, pending.pointerId, point.x, point.y);
+      this.activeRoutedLines = this.buildRoutedLines("active");
+      this.drawRoutes();
       return;
     }
 
@@ -1115,8 +1082,6 @@ export class MapRenderer {
   private onPointerMove = (event: PointerEvent): void => {
     if (this.drag && event.pointerId === this.drag.pointerId) {
       const point = this.clientToWorld(event.clientX, event.clientY);
-      this.tryConvertUnloopDragToLineDrag(point);
-
       const hovered = this.findStationAt(event.clientX, event.clientY);
       const previousSnap = this.drag.snapTargetId;
       const snapTargetId =

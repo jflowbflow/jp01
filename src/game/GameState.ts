@@ -262,13 +262,9 @@ export class GameState {
     const line = this.getLine(lineId);
     if (!line?.isLoop || !line.loopHandleStationId) return null;
 
-    this.activeLineId = lineId;
-    return {
-      lineId,
-      fromStationId: line.loopHandleStationId,
-      addedOnDragStart: false,
-      mode: "unloop",
-    };
+    const fromStationId = line.loopHandleStationId;
+    if (!this.unloopLine(lineId)) return null;
+    return this.beginDragFromStation(fromStationId, lineId);
   }
 
   private segmentEndIndex(line: PlayerLine, segmentIndex: number): number {
