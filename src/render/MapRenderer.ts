@@ -1,5 +1,5 @@
 import { GameState, type DragOrigin } from "../game/GameState.ts";
-import { buildPendingSegments, diffRemovedActiveSegments, isTrainOnAffectedSegments, isTrainOnRouteSegment } from "../game/pendingRoute.ts";
+import { buildPendingSegments, diffRemovedActiveSegments, isTrainOnAffectedSegments } from "../game/pendingRoute.ts";
 import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
 import { mapScale, stationRadius } from "../game/stationSpawner.ts";
@@ -388,43 +388,15 @@ export class MapRenderer {
     return { lineId: line.id, fromId, toId };
   }
 
-  private isTrainOnDraggingSegment(): boolean {
-    const segment = this.getDraggingSegment();
-    if (!segment) return false;
-
-    const line = this.game.getLine(segment.lineId);
-    const train = this.trainSimulation.getTrain(segment.lineId);
-    if (!line || !train) return false;
-
-    return isTrainOnRouteSegment(train, line, this.getStationMap(), segment);
-  }
-
   private drawRoutes(): void {
     this.routesGroup.replaceChildren();
     const stationMap = this.getStationMap();
     const draggingSegment = this.getDraggingSegment();
-    const draggingLine = draggingSegment
-      ? this.game.getLine(draggingSegment.lineId)
-      : undefined;
-    const hideDraggedSegment =
-      draggingLine !== undefined &&
-      !draggingLine.isLoop &&
-      draggingLine.stationIds.length === 2;
-    const fadeDraggedSegment =
-      draggingSegment !== null &&
-      (hideDraggedSegment || this.isTrainOnDraggingSegment());
+    const fadeDraggedSegment = draggingSegment !== null;
 
     for (const routed of this.activeRoutedLines) {
       const line = routed.line;
       const train = this.trainSimulation.getTrain(line.id);
-      if (
-        train !== undefined &&
-        this.game.hasPendingRoute(line) &&
-        this.isTwoNodeSegmentReshape(line)
-      ) {
-        continue;
-      }
-
       const fadeOldSegments =
         train !== undefined &&
         this.game.hasPendingRoute(line) &&
@@ -437,19 +409,11 @@ export class MapRenderer {
             this.segmentDirectedKey(segment.fromId, segment.toId),
           ),
         );
-        const hideRemovedKeys =
-          !line.activeIsLoop && line.activeStationIds.length === 2
-            ? removedKeys
-            : new Set<string>();
-        const fadedKeys = new Set(
-          [...removedKeys].filter((key) => !hideRemovedKeys.has(key)),
-        );
         this.drawActiveRouteSegments(
           this.routesGroup,
           line,
           line.color,
-          fadedKeys,
-          hideRemovedKeys,
+          removedKeys,
         );
         continue;
       }
@@ -463,19 +427,11 @@ export class MapRenderer {
           draggingSegment.fromId,
           draggingSegment.toId,
         );
-        const hideDraggedKeys =
-          !line.isLoop && line.stationIds.length === 2
-            ? new Set([draggedKey])
-            : new Set<string>();
-        const fadedKeys = hideDraggedKeys.has(draggedKey)
-          ? new Set<string>()
-          : new Set([draggedKey]);
         this.drawActiveRouteSegments(
           this.routesGroup,
           line,
           line.color,
-          fadedKeys,
-          hideDraggedKeys,
+          new Set([draggedKey]),
         );
         continue;
       }
