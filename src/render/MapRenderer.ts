@@ -27,6 +27,7 @@ const BOUNCE_MS = 220;
 const DRAG_START_PX = 5;
 const HOLD_CANCEL_PX = 22;
 const UNDO_HOLD_MS = 480;
+const TWO_NODE_ENDPOINT_ZONE_RATIO = 0.4;
 
 type DragState = {
   origin: DragOrigin;
@@ -206,9 +207,19 @@ export class MapRenderer {
     const fromDistance = Math.hypot(from.x - point.x, from.y - point.y);
     const toDistance = Math.hypot(to.x - point.x, to.y - point.y);
     const closestDistance = Math.min(fromDistance, toDistance);
+    const closestEndpointId = fromDistance <= toDistance ? fromId : toId;
+
+    if (!line.isLoop && line.stationIds.length === 2) {
+      const segmentLength = Math.hypot(from.x - to.x, from.y - to.y);
+      const endpointZone = Math.max(
+        hitRadius,
+        segmentLength * TWO_NODE_ENDPOINT_ZONE_RATIO,
+      );
+      return closestDistance <= endpointZone ? closestEndpointId : null;
+    }
 
     if (closestDistance > hitRadius) return null;
-    return fromDistance <= toDistance ? fromId : toId;
+    return closestEndpointId;
   }
 
   private isInteracting(): boolean {
