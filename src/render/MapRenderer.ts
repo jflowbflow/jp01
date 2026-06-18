@@ -18,17 +18,17 @@ import {
 import { createTrainElement } from "./trainRenderer.ts";
 import { MapViewport } from "./viewport.ts";
 
-const LINE_WIDTH = 14;
-const ROUTE_HIT_WIDTH = 44;
-const PASSENGER_SIZE = 4.5;
+const LINE_WIDTH = 11;
+const ROUTE_HIT_WIDTH = 35;
+const PASSENGER_SIZE = 3.6;
 const PENDING_ROUTE_OPACITY = 0.32;
-const PREVIEW_DASH = "10 8";
+const PREVIEW_DASH = "8 6";
 const BOUNCE_MS = 220;
-const DRAG_START_PX = 10;
-const HOLD_CANCEL_PX = 44;
+const DRAG_START_PX = 8;
+const HOLD_CANCEL_PX = 35;
 const HOLD_LOCK_MS = 80;
 const UNDO_HOLD_MS = 480;
-const STATION_HIT_PAD = 28;
+const STATION_HIT_PAD = 22;
 
 type DragState = {
   origin: DragOrigin;

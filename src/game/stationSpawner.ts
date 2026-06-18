@@ -49,9 +49,9 @@ const STATION_NAMES = [
   "Loop",
 ];
 
-const BASE_STATION_RADIUS = 40;
-const MIN_STATION_RADIUS = 10;
-const REFERENCE_STATION_RADIUS = 20;
+const BASE_STATION_RADIUS = 32;
+const MIN_STATION_RADIUS = 8;
+const REFERENCE_STATION_RADIUS = 16;
 
 export function stationRadius(totalStations: number): number {
   const t = Math.min(1, Math.max(0, (totalStations - INITIAL_STATION_COUNT) / 22));
@@ -64,7 +64,7 @@ export function mapScale(totalStations: number): number {
 
 export function minStationDistance(totalStations: number): number {
   const radius = stationRadius(totalStations);
-  return radius * 2 + 48;
+  return radius * 2 + 38;
 }
 
 export function pickStationName(usedNames: Set<string>): string {

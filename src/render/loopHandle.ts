@@ -10,7 +10,7 @@ export function computeLoopHandle(
   station: Station,
   prev: Station,
   next: Station,
-  stubLength = 44,
+  stubLength = 35,
 ): LoopHandleGeometry {
   const trackDx = next.x - prev.x;
   const trackDy = next.y - prev.y;
@@ -35,7 +35,7 @@ export function computeLoopHandle(
     y: station.y + perpY * stubLength,
   };
 
-  const capHalf = 7;
+  const capHalf = 11;
   const capStart = { x: tip.x - tx * capHalf, y: tip.y - ty * capHalf };
   const capEnd = { x: tip.x + tx * capHalf, y: tip.y + ty * capHalf };
 

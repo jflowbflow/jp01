@@ -2,17 +2,17 @@ import type { StationShape } from "../model/types.ts";
 import { createStationShape } from "./stationShapes.ts";
 import type { TrainRenderState } from "../game/trainSimulation.ts";
 
-const TRAIN_LENGTH = 28;
-const TRAIN_WIDTH = 14;
-const SLOT_SIZE = 3.2;
+const TRAIN_LENGTH = 45;
+const TRAIN_WIDTH = 22;
+const SLOT_SIZE = 5;
 
 const SLOT_OFFSETS = [
-  { x: -8, y: -3.5 },
-  { x: -2.5, y: -3.5 },
-  { x: 3, y: -3.5 },
-  { x: 8.5, y: -3.5 },
-  { x: -8, y: 3.5 },
-  { x: -2.5, y: 3.5 },
+  { x: -13, y: -5.5 },
+  { x: -4, y: -5.5 },
+  { x: 5, y: -5.5 },
+  { x: 14, y: -5.5 },
+  { x: -13, y: 5.5 },
+  { x: -4, y: 5.5 },
 ];
 
 export function createTrainElement(state: TrainRenderState): SVGGElement {
@@ -30,10 +30,10 @@ export function createTrainElement(state: TrainRenderState): SVGGElement {
   body.setAttribute("y", String(-TRAIN_WIDTH / 2));
   body.setAttribute("width", String(TRAIN_LENGTH));
   body.setAttribute("height", String(TRAIN_WIDTH));
-  body.setAttribute("rx", "3");
+  body.setAttribute("rx", "5");
   body.setAttribute("fill", "#ffffff");
   body.setAttribute("stroke", state.color);
-  body.setAttribute("stroke-width", "3");
+  body.setAttribute("stroke-width", "5");
   group.append(body);
 
   state.train.passengers.forEach((passenger, index) => {
@@ -47,7 +47,7 @@ export function createTrainElement(state: TrainRenderState): SVGGElement {
       {
         fill: "#ffffff",
         stroke: "#1a1a1e",
-        strokeWidth: 1,
+        strokeWidth: 2,
       },
     );
     group.append(icon);
