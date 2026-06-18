@@ -64,6 +64,16 @@ body {
   transition: transform 0.12s ease;
 }
 
-.line-picker button:hover {
-  transform: scale(1.08);
+.line-picker button.is-active {
+  transform: scale(1.1);
+  border-color: #fffdf8;
+  box-shadow: 0 0 0 2px #1a1a1e, 0 0 0 5px #fffdf8;
+}
+
+.remove-picker {
+  bottom: 96px;
+}
+
+.remove-picker[hidden] {
+  display: none;
 }

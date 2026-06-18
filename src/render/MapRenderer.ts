@@ -64,7 +64,8 @@ type RemovePicker = {
 
 export class MapRenderer {
   private readonly mapEl: HTMLElement;
-  private readonly pickerEl: HTMLElement;
+  private readonly linePickerEl: HTMLElement;
+  private readonly removePickerEl: HTMLElement;
   private readonly game = new GameState();
   private readonly simulation = new Simulation(this.game);
   private readonly trainSimulation = new TrainSimulation();
@@ -90,9 +91,14 @@ export class MapRenderer {
   private pendingStationRedraw = false;
   private stationShapeElements = new Map<string, SVGElement>();
 
-  constructor(mapEl: HTMLElement, pickerEl: HTMLElement) {
+  constructor(
+    mapEl: HTMLElement,
+    linePickerEl: HTMLElement,
+    removePickerEl: HTMLElement,
+  ) {
     this.mapEl = mapEl;
-    this.pickerEl = pickerEl;
+    this.linePickerEl = linePickerEl;
+    this.removePickerEl = removePickerEl;
     this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.svg.setAttribute("viewBox", "0 0 900 560");
     this.svg.setAttribute("role", "img");
@@ -118,6 +124,7 @@ export class MapRenderer {
     );
     this.mapEl.replaceChildren(this.svg);
     this.viewport.apply(this.svg);
+    this.renderLinePicker();
 
     this.svg.addEventListener("pointerdown", this.onPointerDown);
     this.svg.addEventListener("pointermove", this.onPointerMove);
@@ -793,6 +800,7 @@ export class MapRenderer {
     for (const line of this.game.getLines()) {
       this.game.finalizeRouteChange(line.id, this.trainSimulation.getTrain(line.id));
     }
+    this.renderLinePicker();
     this.redrawStations();
     this.refresh();
   }
@@ -854,6 +862,7 @@ export class MapRenderer {
   private startDrag(origin: DragOrigin, pointerId: number, x: number, y: number): void {
     this.pendingPointer = null;
     this.clearUndoHold();
+    this.renderLinePicker();
     this.drag = {
       origin,
       pointerId,
@@ -909,10 +918,35 @@ export class MapRenderer {
     return true;
   }
 
+  private renderLinePicker(): void {
+    const activeId = this.game.getActiveLineId();
+    this.linePickerEl.replaceChildren(
+      ...this.game.getLines().map((line) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.style.background = line.color;
+        button.className = line.id === activeId ? "is-active" : "";
+        button.setAttribute("aria-label", line.name);
+        button.setAttribute("aria-pressed", String(line.id === activeId));
+        button.addEventListener("click", () => this.selectLine(line.id));
+        return button;
+      }),
+    );
+  }
+
+  private selectLine(lineId: string): void {
+    if (this.isInteracting()) return;
+
+    this.game.setActiveLine(lineId);
+    this.renderLinePicker();
+    this.redrawStations();
+    this.drawPreview();
+  }
+
   private showRemovePicker(stationId: string, lines: PlayerLine[]): void {
     this.removePicker = { stationId, lines };
-    this.pickerEl.hidden = false;
-    this.pickerEl.replaceChildren(
+    this.removePickerEl.hidden = false;
+    this.removePickerEl.replaceChildren(
       ...lines.map((line) => {
         const button = document.createElement("button");
         button.type = "button";
@@ -926,8 +960,8 @@ export class MapRenderer {
 
   private hideRemovePicker(): void {
     this.removePicker = null;
-    this.pickerEl.hidden = true;
-    this.pickerEl.replaceChildren();
+    this.removePickerEl.hidden = true;
+    this.removePickerEl.replaceChildren();
   }
 
   private pickRemoveLine(lineId: string): void {

@@ -187,36 +187,24 @@ export class GameState {
     return this.lines.find((line) => line.stationIds.length === 0);
   }
 
+  findNextAvailableLine(): PlayerLine | undefined {
+    const active = this.getActiveLine();
+    if (active.stationIds.length === 0) return active;
+    return this.findEmptyLine();
+  }
+
   beginDragFromStation(stationId: string, lineId?: string): DragOrigin | null {
-    const extendable = lineId
-      ? this.getExtendableLinesAtStation(stationId).find((line) => line.id === lineId)
-      : undefined;
-
-    if (extendable) {
-      const extendEnd = this.getExtendEnd(extendable, stationId);
-      if (!extendEnd) return null;
-
-      this.activeLineId = extendable.id;
-      return {
-        lineId: extendable.id,
-        fromStationId: stationId,
-        addedOnDragStart: false,
-        mode: "extend",
-        extendEnd,
-      };
-    }
-
-    if (!lineId) {
-      const candidates = this.getExtendableLinesAtStation(stationId);
-      if (candidates.length >= 1) {
-        const preferred =
-          candidates.find((line) => line.id === this.activeLineId) ?? candidates[0];
-        const extendEnd = this.getExtendEnd(preferred, stationId);
+    if (lineId) {
+      const extendable = this.getExtendableLinesAtStation(stationId).find(
+        (line) => line.id === lineId,
+      );
+      if (extendable) {
+        const extendEnd = this.getExtendEnd(extendable, stationId);
         if (!extendEnd) return null;
 
-        this.activeLineId = preferred.id;
+        this.activeLineId = extendable.id;
         return {
-          lineId: preferred.id,
+          lineId: extendable.id,
           fromStationId: stationId,
           addedOnDragStart: false,
           mode: "extend",
@@ -225,9 +213,20 @@ export class GameState {
       }
     }
 
-    if (this.isStationOnLine(stationId)) return null;
+    const activeLine = this.getActiveLine();
+    const activeExtendEnd = this.getExtendEnd(activeLine, stationId);
+    if (activeExtendEnd) {
+      this.activeLineId = activeLine.id;
+      return {
+        lineId: activeLine.id,
+        fromStationId: stationId,
+        addedOnDragStart: false,
+        mode: "extend",
+        extendEnd: activeExtendEnd,
+      };
+    }
 
-    const emptyLine = this.findEmptyLine();
+    const emptyLine = this.findNextAvailableLine();
     if (!emptyLine) return null;
 
     this.activeLineId = emptyLine.id;
