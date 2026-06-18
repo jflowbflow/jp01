@@ -346,8 +346,6 @@ export class GameState {
     if (endIndex >= 0 && stationId === line.stationIds[endIndex]) return false;
     if (line.stationIds.includes(stationId)) return false;
 
-    line.isLoop = false;
-    line.loopHandleStationId = undefined;
     line.stationIds.splice(insertAt, 0, stationId);
     return true;
   }
@@ -496,12 +494,8 @@ export class GameState {
 
     const junction = pickJunctionForStationRemoval(line, stationId);
 
-    if (line.isLoop) {
-      line.isLoop = false;
-      line.loopHandleStationId = undefined;
-    }
-
     line.stationIds.splice(index, 1);
+    this.normalizeLineLoopState(line);
 
     if (line.stationIds.length === 0) {
       this.syncActiveRoute(line);

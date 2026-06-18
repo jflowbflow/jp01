@@ -63,14 +63,14 @@ export function createHitArea(x: number, y: number, radius: number): SVGCircleEl
   const hitArea = document.createElementNS("http://www.w3.org/2000/svg", "circle");
   hitArea.setAttribute("cx", String(x));
   hitArea.setAttribute("cy", String(y));
-  hitArea.setAttribute("r", String(radius + 10));
+  hitArea.setAttribute("r", String(radius + 20));
   hitArea.setAttribute("fill", "transparent");
   return hitArea;
 }
 
 export function passengerOffset(index: number, stationRadius: number): Point {
   return {
-    x: stationRadius + 12 + index * 9,
+    x: stationRadius + 24 + index * 18,
     y: stationRadius * 0.35,
   };
 }

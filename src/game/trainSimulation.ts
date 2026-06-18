@@ -8,7 +8,7 @@ import {
 } from "../geometry/octilinearRouter.ts";
 import type { Station, Train } from "../model/types.ts";
 import { TRAIN_CAPACITY } from "../model/types.ts";
-import { getTrainAtStationOnLine, isTrainOnAffectedSegments } from "./pendingRoute.ts";
+import { getTrainAtStationOnLine, isTrainBlockingPendingRoute } from "./pendingRoute.ts";
 import type { GameState } from "./GameState.ts";
 
 const DWELL_SECONDS = 0.55;
@@ -52,7 +52,7 @@ export class TrainSimulation {
     if (!line || !train || !game.hasPendingRoute(line)) return false;
 
     const stationMap = new Map(game.getStations().map((station) => [station.id, station]));
-    return isTrainOnAffectedSegments(train, line, stationMap);
+    return isTrainBlockingPendingRoute(train, line, stationMap);
   }
 
   update(

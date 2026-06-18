@@ -10,7 +10,7 @@ export function computeLoopHandle(
   station: Station,
   prev: Station,
   next: Station,
-  stubLength = 22,
+  stubLength = 44,
 ): LoopHandleGeometry {
   const trackDx = next.x - prev.x;
   const trackDy = next.y - prev.y;

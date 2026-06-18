@@ -49,9 +49,9 @@ const STATION_NAMES = [
   "Loop",
 ];
 
-const BASE_STATION_RADIUS = 20;
-const MIN_STATION_RADIUS = 5;
-const REFERENCE_STATION_RADIUS = 10;
+const BASE_STATION_RADIUS = 40;
+const MIN_STATION_RADIUS = 10;
+const REFERENCE_STATION_RADIUS = 20;
 
 export function stationRadius(totalStations: number): number {
   const t = Math.min(1, Math.max(0, (totalStations - INITIAL_STATION_COUNT) / 22));

@@ -1,5 +1,5 @@
 import { GameState, type DragOrigin } from "../game/GameState.ts";
-import { buildPendingSegments, diffRemovedActiveSegments, isTrainOnAffectedSegments } from "../game/pendingRoute.ts";
+import { buildPendingSegments, diffRemovedActiveSegments, isTrainBlockingPendingRoute } from "../game/pendingRoute.ts";
 import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
 import { mapScale, stationRadius } from "../game/stationSpawner.ts";
@@ -18,15 +18,17 @@ import {
 import { createTrainElement } from "./trainRenderer.ts";
 import { MapViewport } from "./viewport.ts";
 
-const LINE_WIDTH = 7;
-const ROUTE_HIT_WIDTH = 22;
+const LINE_WIDTH = 14;
+const ROUTE_HIT_WIDTH = 44;
 const PASSENGER_SIZE = 4.5;
 const PENDING_ROUTE_OPACITY = 0.32;
 const PREVIEW_DASH = "10 8";
 const BOUNCE_MS = 220;
-const DRAG_START_PX = 5;
-const HOLD_CANCEL_PX = 22;
+const DRAG_START_PX = 10;
+const HOLD_CANCEL_PX = 44;
+const HOLD_LOCK_MS = 80;
 const UNDO_HOLD_MS = 480;
+const STATION_HIT_PAD = 28;
 
 type DragState = {
   origin: DragOrigin;
@@ -163,7 +165,7 @@ export class MapRenderer {
 
   private findStationAt(clientX: number, clientY: number): Station | null {
     const point = this.clientToWorld(clientX, clientY);
-    const hitRadius = this.getBaseRadius() + 14;
+    const hitRadius = this.getBaseRadius() + STATION_HIT_PAD;
     let closest: Station | null = null;
     let closestDistance = Infinity;
 
@@ -202,7 +204,7 @@ export class MapRenderer {
     if (!from || !to) return null;
 
     const point = this.clientToWorld(clientX, clientY);
-    const hitRadius = this.getBaseRadius() + 14;
+    const hitRadius = this.getBaseRadius() + STATION_HIT_PAD;
     const fromDistance = Math.hypot(from.x - point.x, from.y - point.y);
     const toDistance = Math.hypot(to.x - point.x, to.y - point.y);
     const closestDistance = Math.min(fromDistance, toDistance);
@@ -400,7 +402,7 @@ export class MapRenderer {
       const fadeOldSegments =
         train !== undefined &&
         this.game.hasPendingRoute(line) &&
-        isTrainOnAffectedSegments(train, line, stationMap);
+        isTrainBlockingPendingRoute(train, line, stationMap);
 
       if (fadeOldSegments) {
         const removedSegments = diffRemovedActiveSegments(line);
@@ -589,10 +591,12 @@ export class MapRenderer {
                 ? active.color
                 : "#1a1a1e";
 
+      const strokeScale = this.getMapScale();
       const shape = createStationShape(station.shape, station.x, station.y, radius, {
         fill: hovered || isSnapTarget || isUndoHold ? "#fffdf8" : "#f7f5f0",
         stroke,
-        strokeWidth: isSnapTarget || isUndoHold || lineColors.length > 1 ? 4 : 3,
+        strokeWidth:
+          (isSnapTarget || isUndoHold || lineColors.length > 1 ? 4 : 3) * strokeScale,
       });
       shape.setAttribute("pointer-events", "none");
       this.stationShapeElements.set(station.id, shape);
@@ -893,7 +897,7 @@ export class MapRenderer {
 
     const line = this.game.getLine(lineId);
     const train = this.trainSimulation.getTrain(lineId);
-    if (line && (!train || !isTrainOnAffectedSegments(train, line, this.getStationMap()))) {
+    if (line && (!train || !isTrainBlockingPendingRoute(train, line, this.getStationMap()))) {
       this.game.finalizeRouteChange(lineId, train);
     }
 
@@ -1007,15 +1011,17 @@ export class MapRenderer {
 
         if (elapsed >= UNDO_HOLD_MS) {
           this.pendingPointer = null;
+          this.clearUndoHold();
           this.tryRemoveHold(pending.stationId);
           return;
         }
 
-        if (moved < HOLD_CANCEL_PX) {
+        const holdLocked = elapsed >= HOLD_LOCK_MS;
+        if (!holdLocked && moved >= HOLD_CANCEL_PX) {
+          this.clearUndoHold();
+        } else {
           return;
         }
-
-        this.clearUndoHold();
       }
     }
 

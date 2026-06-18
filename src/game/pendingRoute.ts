@@ -232,6 +232,27 @@ export function isTrainOnAffectedSegments(
   );
 }
 
+function isTrainAtRemovedStation(
+  train: Train,
+  line: PlayerLine,
+  stationMap: Map<string, Station>,
+): boolean {
+  const pendingIds = new Set(line.stationIds);
+  const atStationId = getTrainAtStationOnLine(train, line, stationMap);
+  return atStationId !== null && !pendingIds.has(atStationId);
+}
+
+export function isTrainBlockingPendingRoute(
+  train: Train,
+  line: PlayerLine,
+  stationMap: Map<string, Station>,
+): boolean {
+  return (
+    isTrainOnAffectedSegments(train, line, stationMap) ||
+    isTrainAtRemovedStation(train, line, stationMap)
+  );
+}
+
 export function canApplyRouteChangeNow(
   train: Train | undefined,
   line: PlayerLine,
@@ -251,7 +272,7 @@ export function canApplyRouteChangeNow(
     return true;
   }
 
-  return !isTrainOnAffectedSegments(train, line, stationMap);
+  return !isTrainBlockingPendingRoute(train, line, stationMap);
 }
 
 export function closestPathDistance(pathD: string, point: { x: number; y: number }): number {
@@ -311,5 +332,5 @@ export function isTrainOnJunctionSegment(
   stationMap: Map<string, Station>,
 ): boolean {
   if (!line.pendingApplyStationId || line.activeStationIds.length < 2) return false;
-  return isTrainOnAffectedSegments(train, line, stationMap);
+  return isTrainBlockingPendingRoute(train, line, stationMap);
 }
