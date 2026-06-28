@@ -13,10 +13,17 @@ export type Station = Point & {
   shape: StationShape;
 };
 
+export type PassengerRouteLeg = {
+  lineId: string;
+  alightStationId: string;
+};
+
 export type Passenger = {
   id: string;
   stationId: string;
   destinationShape: StationShape;
+  routeLegs?: PassengerRouteLeg[];
+  routeLegIndex?: number;
 };
 
 export type LineDefinition = {

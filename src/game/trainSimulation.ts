@@ -9,6 +9,11 @@ import {
 import type { Station, Train } from "../model/types.ts";
 import { TRAIN_CAPACITY } from "../model/types.ts";
 import { getTrainAtStationOnLine, isTrainBlockingPendingRoute } from "./pendingRoute.ts";
+import {
+  advancePassengerAfterAlight,
+  shouldPassengerAlight,
+  shouldPassengerBoard,
+} from "./passengerRouting.ts";
 import type { GameState } from "./GameState.ts";
 
 const DWELL_SECONDS = 0.55;
@@ -310,18 +315,31 @@ export class TrainSimulation {
     const station = stationMap.get(stationId);
     if (!station) return false;
 
-    const before = train.passengers.length;
-    train.passengers = train.passengers.filter(
-      (passenger) => passenger.destinationShape !== station.shape,
-    );
-    if (train.passengers.length !== before) changed = true;
+    const network = game.getTransitNetwork();
+    const staying = [];
 
-    const routeShapes = game.getActiveRouteShapes(train.lineId);
+    for (const passenger of train.passengers) {
+      if (!shouldPassengerAlight(passenger, stationId, station.shape)) {
+        staying.push(passenger);
+        continue;
+      }
+
+      changed = true;
+      if (station.shape === passenger.destinationShape) {
+        continue;
+      }
+
+      advancePassengerAfterAlight(passenger, stationId, station.shape);
+      game.returnPassengerToPlatform(passenger);
+    }
+
+    train.passengers = staying;
+
     const waiting = game.getPassengersAtStation(stationId);
 
     for (const passenger of waiting) {
       if (train.passengers.length >= TRAIN_CAPACITY) break;
-      if (!routeShapes.has(passenger.destinationShape)) continue;
+      if (!shouldPassengerBoard(passenger, train.lineId, stationId, network)) continue;
       if (game.boardPassenger(passenger.id)) {
         train.passengers.push(passenger);
         changed = true;

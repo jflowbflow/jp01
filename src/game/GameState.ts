@@ -18,6 +18,7 @@ import {
   pickJunctionForStationRemoval,
   remapTrainToPendingRoute,
 } from "./pendingRoute.ts";
+import { planPassengerRoute, type TransitNetwork } from "./passengerRouting.ts";
 import type { Passenger, PlayerLine, Station, StationShape, Train } from "../model/types.ts";
 
 export type DragMode = "extend" | "insert" | "new" | "unloop";
@@ -161,6 +162,13 @@ export class GameState {
       if (station) shapes.add(station.shape);
     }
     return shapes;
+  }
+
+  getTransitNetwork(): TransitNetwork {
+    return {
+      stations: this.stations,
+      lines: this.lines,
+    };
   }
 
   isStationOnLine(stationId: string): boolean {
@@ -517,6 +525,10 @@ export class GameState {
     return true;
   }
 
+  returnPassengerToPlatform(passenger: Passenger): void {
+    this.passengers.push(passenger);
+  }
+
   undoLastStation(lineId?: string): boolean {
     const line = this.lines.find((entry) => entry.id === (lineId ?? this.activeLineId));
     if (line) this.normalizeLineLoopState(line);
@@ -575,11 +587,19 @@ export class GameState {
         ? destinationOptions[Math.floor(Math.random() * destinationOptions.length)]
         : shapesOnMap[Math.floor(Math.random() * shapesOnMap.length)];
 
-    this.passengers.push({
+    const passenger: Passenger = {
       id: `p${this.nextPassengerId}`,
       stationId,
       destinationShape,
-    });
+    };
+
+    const routeLegs = planPassengerRoute(stationId, destinationShape, this.getTransitNetwork());
+    if (routeLegs) {
+      passenger.routeLegs = routeLegs;
+      passenger.routeLegIndex = 0;
+    }
+
+    this.passengers.push(passenger);
     this.nextPassengerId += 1;
     return true;
   }
