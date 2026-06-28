@@ -25,8 +25,6 @@ const PENDING_ROUTE_OPACITY = 0.32;
 const PREVIEW_DASH = "8 6";
 const BOUNCE_MS = 220;
 const DRAG_START_PX = 8;
-const HOLD_CANCEL_PX = 35;
-const HOLD_LOCK_MS = 80;
 const UNDO_HOLD_MS = 480;
 const STATION_HIT_PAD = 22;
 
@@ -1036,8 +1034,14 @@ export class MapRenderer {
     const elapsed = performance.now() - pending.startedAt;
 
     if (pending.kind === "station" && pending.stationId) {
-      const canRemove = this.game.getRemovableLinesAtStation(pending.stationId).length > 0;
+      if (moved > DRAG_START_PX) {
+        this.clearUndoHold();
+        this.pendingPointer = null;
+        this.startPendingDrag(pending);
+        return;
+      }
 
+      const canRemove = this.game.getRemovableLinesAtStation(pending.stationId).length > 0;
       if (canRemove) {
         this.undoHoldStationId = pending.stationId;
         this.undoHoldProgress = Math.min(1, elapsed / UNDO_HOLD_MS);
@@ -1047,15 +1051,8 @@ export class MapRenderer {
           this.pendingPointer = null;
           this.clearUndoHold();
           this.tryRemoveHold(pending.stationId);
-          return;
         }
-
-        const holdLocked = elapsed >= HOLD_LOCK_MS;
-        if (!holdLocked && moved >= HOLD_CANCEL_PX) {
-          this.clearUndoHold();
-        } else {
-          return;
-        }
+        return;
       }
     }
 
