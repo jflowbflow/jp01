@@ -80,6 +80,14 @@ export class GameState {
     }
   }
 
+  private clearSingleNodeLine(line: PlayerLine): void {
+    if (line.stationIds.length === 1) {
+      line.stationIds.length = 0;
+      line.isLoop = false;
+      line.loopHandleStationId = undefined;
+    }
+  }
+
   getLines(): readonly PlayerLine[] {
     for (const line of this.lines) {
       this.normalizeLineLoopState(line);
@@ -503,13 +511,14 @@ export class GameState {
 
     line.stationIds.splice(index, 1);
     this.normalizeLineLoopState(line);
+    this.clearSingleNodeLine(line);
 
     if (line.stationIds.length === 0) {
       this.syncActiveRoute(line);
       return true;
     }
 
-    if (line.stationIds.length === 1 || line.activeStationIds.length < 2) {
+    if (line.activeStationIds.length < 2) {
       this.syncActiveRoute(line);
     } else if (junction) {
       this.queueRouteChange(line.id, junction);
@@ -534,6 +543,7 @@ export class GameState {
     if (line) this.normalizeLineLoopState(line);
     if (!line || line.isLoop || line.stationIds.length === 0) return false;
     line.stationIds.pop();
+    this.clearSingleNodeLine(line);
     this.syncActiveRoute(line);
     return true;
   }
