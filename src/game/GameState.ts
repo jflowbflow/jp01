@@ -514,7 +514,6 @@ export class GameState {
     this.clearSingleNodeLine(line);
 
     if (line.stationIds.length === 0) {
-      this.syncActiveRoute(line);
       return true;
     }
 

@@ -5,6 +5,7 @@ import { TrainSimulation } from "../game/trainSimulation.ts";
 import { mapScale, stationRadius } from "../game/stationSpawner.ts";
 import {
   pathTotalLength,
+  pointAtPathLength,
   routeOctilinear,
   routeOctilinearOpen,
 } from "../geometry/octilinearRouter.ts";
@@ -27,6 +28,20 @@ const BOUNCE_MS = 220;
 const DRAG_START_PX = 8;
 const UNDO_HOLD_MS = 480;
 const STATION_HIT_PAD = 22;
+const ROUTE_RESHAPE_MS = 360;
+const ROUTE_FADE_MS = 360;
+
+type RouteTransitionKind = "reshape" | "fadeOut";
+
+type RouteTransition = {
+  lineId: string;
+  kind: RouteTransitionKind;
+  fromPathD: string;
+  toPathD: string | null;
+  color: string;
+  startTime: number;
+  duration: number;
+};
 
 type DragState = {
   origin: DragOrigin;
@@ -81,6 +96,7 @@ export class MapRenderer {
   private hoveredStationId: string | null = null;
   private pendingStationRedraw = false;
   private stationShapeElements = new Map<string, SVGElement>();
+  private routeTransitions = new Map<string, RouteTransition>();
 
   constructor(
     mapEl: HTMLElement,
@@ -218,7 +234,8 @@ export class MapRenderer {
     return (
       this.drag !== null ||
       this.bounce !== null ||
-      this.pendingPointer !== null
+      this.pendingPointer !== null ||
+      this.routeTransitions.size > 0
     );
   }
 
@@ -271,17 +288,142 @@ export class MapRenderer {
     pathD: string,
     color: string,
     opacity = "0.95",
+    strokeWidth = this.getLineWidth(),
   ): void {
     const track = document.createElementNS("http://www.w3.org/2000/svg", "path");
     track.setAttribute("d", pathD);
     track.setAttribute("fill", "none");
     track.setAttribute("stroke", color);
-    track.setAttribute("stroke-width", String(this.getLineWidth()));
+    track.setAttribute("stroke-width", String(strokeWidth));
     track.setAttribute("stroke-linecap", "round");
     track.setAttribute("stroke-linejoin", "round");
     track.setAttribute("opacity", opacity);
     track.setAttribute("pointer-events", "none");
     parent.append(track);
+  }
+
+  private easeOutCubic(t: number): number {
+    return 1 - (1 - t) ** 3;
+  }
+
+  private resamplePath(pathD: string, samples: number): Point[] {
+    const total = pathTotalLength(pathD);
+    if (total === 0 || samples < 2) return [];
+
+    const points: Point[] = [];
+    for (let index = 0; index < samples; index += 1) {
+      points.push(pointAtPathLength(pathD, (total * index) / (samples - 1)));
+    }
+    return points;
+  }
+
+  private interpolatePathD(fromPathD: string, toPathD: string, t: number): string {
+    const samples = 40;
+    const fromPoints = this.resamplePath(fromPathD, samples);
+    const toPoints = this.resamplePath(toPathD, samples);
+    if (fromPoints.length < 2 || toPoints.length < 2) return toPathD;
+
+    const parts = [`M ${fromPoints[0].x + (toPoints[0].x - fromPoints[0].x) * t} ${fromPoints[0].y + (toPoints[0].y - fromPoints[0].y) * t}`];
+    for (let index = 1; index < fromPoints.length; index += 1) {
+      const x = fromPoints[index].x + (toPoints[index].x - fromPoints[index].x) * t;
+      const y = fromPoints[index].y + (toPoints[index].y - fromPoints[index].y) * t;
+      parts.push(`L ${x} ${y}`);
+    }
+    return parts.join(" ");
+  }
+
+  private buildLinePath(line: PlayerLine, kind: "active" | "pending"): string {
+    const stationMap = this.getStationMap();
+    const stationIds = kind === "active" ? line.activeStationIds : line.stationIds;
+    const isLoop = kind === "active" ? line.activeIsLoop : line.isLoop;
+    const stations = stationIds
+      .map((id) => stationMap.get(id))
+      .filter((station): station is Station => Boolean(station));
+
+    if (stations.length < 2) return "";
+
+    return isLoop ? routeOctilinear(stations) : routeOctilinearOpen(stations);
+  }
+
+  private startRouteRemovalTransition(stationId: string, lineId: string): boolean {
+    const line = this.game.getLine(lineId);
+    if (!line || !line.activeStationIds.includes(stationId)) return false;
+
+    const fromPathD = this.buildLinePath(line, "active");
+    if (!fromPathD) return false;
+
+    if (!this.game.removeStationFromLine(stationId, lineId)) return false;
+
+    const updatedLine = this.game.getLine(lineId);
+    if (!updatedLine) return false;
+
+    const willFadeOut = updatedLine.stationIds.length === 0;
+    const toPathD = willFadeOut ? null : this.buildLinePath(updatedLine, "pending");
+
+    if (!willFadeOut && !toPathD) {
+      this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
+      return true;
+    }
+
+    this.routeTransitions.set(lineId, {
+      lineId,
+      kind: willFadeOut ? "fadeOut" : "reshape",
+      fromPathD,
+      toPathD,
+      color: updatedLine.color,
+      startTime: performance.now(),
+      duration: willFadeOut ? ROUTE_FADE_MS : ROUTE_RESHAPE_MS,
+    });
+
+    return true;
+  }
+
+  private drawRouteTransition(transition: RouteTransition, now: number): void {
+    const progress = Math.min(1, (now - transition.startTime) / transition.duration);
+    const eased = this.easeOutCubic(progress);
+    const lineWidth = this.getLineWidth();
+
+    if (transition.kind === "fadeOut") {
+      this.appendRouteTrack(
+        this.routesGroup,
+        transition.fromPathD,
+        transition.color,
+        String(0.95 * (1 - eased)),
+        lineWidth * (1 - eased),
+      );
+      return;
+    }
+
+    if (transition.toPathD) {
+      const morphedPathD = this.interpolatePathD(
+        transition.fromPathD,
+        transition.toPathD,
+        eased,
+      );
+      this.appendRouteTrack(
+        this.routesGroup,
+        morphedPathD,
+        transition.color,
+        "0.95",
+        lineWidth,
+      );
+    }
+  }
+
+  private updateRouteTransitions(now: number): void {
+    let completed = false;
+
+    for (const [lineId, transition] of this.routeTransitions) {
+      if (now - transition.startTime < transition.duration) continue;
+
+      this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
+      this.routeTransitions.delete(lineId);
+      completed = true;
+    }
+
+    if (completed) {
+      this.activeRoutedLines = this.buildRoutedLines("active");
+    }
   }
 
   private getInsertSegmentEndStation(
@@ -390,8 +532,15 @@ export class MapRenderer {
     const stationMap = this.getStationMap();
     const draggingSegment = this.getDraggingSegment();
     const fadeDraggedSegment = draggingSegment !== null;
+    const now = performance.now();
+
+    for (const transition of this.routeTransitions.values()) {
+      this.drawRouteTransition(transition, now);
+    }
 
     for (const routed of this.activeRoutedLines) {
+      if (this.routeTransitions.has(routed.line.id)) continue;
+
       const line = routed.line;
       const train = this.trainSimulation.getTrain(line.id);
       const fadeOldSegments =
@@ -437,6 +586,7 @@ export class MapRenderer {
     }
 
     for (const line of this.game.getLines()) {
+      if (this.routeTransitions.has(line.id)) continue;
       if (!this.game.hasPendingRoute(line)) continue;
       if (!this.trainSimulation.getTrain(line.id)) continue;
 
@@ -786,6 +936,7 @@ export class MapRenderer {
       this.pendingStationRedraw = false;
     }
     for (const line of this.game.getLines()) {
+      if (this.routeTransitions.has(line.id)) continue;
       this.game.finalizeRouteChange(line.id, this.trainSimulation.getTrain(line.id));
     }
     this.renderLinePicker();
@@ -794,7 +945,7 @@ export class MapRenderer {
   }
 
   private afterRouteChange(lineId: string): void {
-    if (this.isInteracting()) return;
+    if (this.isInteracting() || this.routeTransitions.has(lineId)) return;
     this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
   }
 
@@ -947,9 +1098,10 @@ export class MapRenderer {
 
     if (!targetLine) return;
 
-    if (this.game.removeStationFromLine(stationId, targetLine.id)) {
-      this.afterRouteChange(targetLine.id);
-      this.finishInteractionRefresh();
+    if (this.startRouteRemovalTransition(stationId, targetLine.id)) {
+      this.renderLinePicker();
+      this.redrawStations();
+      this.refresh();
     }
   }
 
@@ -1189,9 +1341,10 @@ export class MapRenderer {
     event.preventDefault();
     const active = this.game.getActiveLine();
     const lastId = active.stationIds.at(-1);
-    if (lastId && this.game.removeStationFromLine(lastId, active.id)) {
-      this.afterRouteChange(active.id);
-      this.finishInteractionRefresh();
+    if (lastId && this.startRouteRemovalTransition(lastId, active.id)) {
+      this.renderLinePicker();
+      this.redrawStations();
+      this.refresh();
     }
   };
 
@@ -1232,6 +1385,11 @@ export class MapRenderer {
           this.previewGroup.replaceChildren();
           this.finishInteractionRefresh();
         }
+      }
+
+      if (this.routeTransitions.size > 0) {
+        this.updateRouteTransitions(now);
+        this.drawRoutes();
       }
 
       const hasActiveRoutes = this.game.getLines().some(
