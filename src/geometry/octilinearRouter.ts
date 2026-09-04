@@ -114,13 +114,17 @@ export function pointAtPathLength(pathD: string, distance: number): Point {
   return { x: point.x, y: point.y };
 }
 
-export function pathAngleAtLength(pathD: string, distance: number): number {
+export function pathAngleAtLength(
+  pathD: string,
+  distance: number,
+  direction: 1 | -1 = 1,
+): number {
   const length = pathTotalLength(pathD);
   if (length === 0) return 0;
 
   const sample = Math.min(4, length * 0.02);
   const p1 = pointAtPathLength(pathD, distance);
-  const p2 = pointAtPathLength(pathD, distance + sample);
+  const p2 = pointAtPathLength(pathD, distance + sample * direction);
   return Math.atan2(p2.y - p1.y, p2.x - p1.x);
 }
 

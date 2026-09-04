@@ -139,7 +139,7 @@ export function getUnlockedShapes(shapeCounts: Record<StationShape, number>): St
   const unlocked: StationShape[] = [SHAPE_ORDER[0]];
 
   for (let i = 0; i < SHAPE_ORDER.length - 1; i += 1) {
-    if (shapeCounts[SHAPE_ORDER[i]] >= 2) {
+    if (shapeCounts[SHAPE_ORDER[i]] >= 1) {
       unlocked.push(SHAPE_ORDER[i + 1]);
     }
   }
@@ -154,7 +154,12 @@ export function pickStationShape(
   if (forceShape) return forceShape;
 
   const unlocked = getUnlockedShapes(shapeCounts);
-  return unlocked[Math.floor(Math.random() * unlocked.length)];
+  let roll = Math.random() * unlocked.length * (unlocked.length + 1) * 0.5;
+  for (let i = 0; i < unlocked.length; i += 1) {
+    roll -= i + 1;
+    if (roll <= 0) return unlocked[i];
+  }
+  return unlocked[unlocked.length - 1];
 }
 
 export function createStation(

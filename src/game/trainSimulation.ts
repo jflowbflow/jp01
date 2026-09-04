@@ -112,13 +112,20 @@ export class TrainSimulation {
           ? routeOctilinear(updatedStations)
           : routeOctilinearOpen(updatedStations);
         if (updatedPathD) {
-          train.displayAngle = pathAngleAtLength(updatedPathD, train.distance);
+          train.displayAngle = pathAngleAtLength(
+            updatedPathD,
+            train.distance,
+            train.direction,
+          );
         }
         continue;
       }
 
       if (train.dwellRemaining > 0) {
         train.dwellRemaining = Math.max(0, train.dwellRemaining - dt);
+        if (train.dwellRemaining === 0) {
+          train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
+        }
         continue;
       }
 
@@ -146,14 +153,14 @@ export class TrainSimulation {
             ? routeOctilinear(updatedStations)
             : routeOctilinearOpen(updatedStations);
           if (updatedPathD) {
-            train.displayAngle = pathAngleAtLength(updatedPathD, train.distance);
+            train.displayAngle = pathAngleAtLength(
+              updatedPathD,
+              train.distance,
+              train.direction,
+            );
           }
         } else {
-          train.displayAngle = lerpAngle(
-            train.displayAngle,
-            pathAngleAtLength(pathD, train.distance),
-            dt,
-          );
+          train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
         }
         if (this.handleStationStop(train, crossed.stationId, game, stationMap)) {
           passengersChanged = true;
@@ -165,21 +172,27 @@ export class TrainSimulation {
 
       if (route.isLoop) {
         train.distance = ((nextDistance % totalLength) + totalLength) % totalLength;
+        train.displayAngle = lerpAngle(
+          train.displayAngle,
+          pathAngleAtLength(pathD, train.distance, train.direction),
+          dt,
+        );
       } else if (nextDistance >= totalLength) {
         train.distance = totalLength;
         train.direction = -1;
+        train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
       } else if (nextDistance <= 0) {
         train.distance = 0;
         train.direction = 1;
+        train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
       } else {
         train.distance = nextDistance;
+        train.displayAngle = lerpAngle(
+          train.displayAngle,
+          pathAngleAtLength(pathD, train.distance, train.direction),
+          dt,
+        );
       }
-
-      train.displayAngle = lerpAngle(
-        train.displayAngle,
-        pathAngleAtLength(pathD, train.distance),
-        dt,
-      );
     }
 
     return { passengersChanged, routeApplied };

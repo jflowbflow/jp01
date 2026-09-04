@@ -592,22 +592,21 @@ export class GameState {
 
     const shapesOnMap = [...new Set(this.stations.map((entry) => entry.shape))];
     const destinationOptions = shapesOnMap.filter((shape) => shape !== station.shape);
+    if (destinationOptions.length === 0) return false;
+
     const destinationShape =
-      destinationOptions.length > 0
-        ? destinationOptions[Math.floor(Math.random() * destinationOptions.length)]
-        : shapesOnMap[Math.floor(Math.random() * shapesOnMap.length)];
+      destinationOptions[Math.floor(Math.random() * destinationOptions.length)];
+
+    const routeLegs = planPassengerRoute(stationId, destinationShape, this.getTransitNetwork());
+    if (!routeLegs) return false;
 
     const passenger: Passenger = {
       id: `p${this.nextPassengerId}`,
       stationId,
       destinationShape,
+      routeLegs,
+      routeLegIndex: 0,
     };
-
-    const routeLegs = planPassengerRoute(stationId, destinationShape, this.getTransitNetwork());
-    if (routeLegs) {
-      passenger.routeLegs = routeLegs;
-      passenger.routeLegIndex = 0;
-    }
 
     this.passengers.push(passenger);
     this.nextPassengerId += 1;
