@@ -31,6 +31,15 @@ function lerpAngle(current: number, target: number, dt: number): number {
   return current + Math.sign(delta) * maxStep;
 }
 
+function trainPathAngle(
+  pathD: string,
+  distance: number,
+  direction: 1 | -1,
+  isLoop: boolean,
+): number {
+  return pathAngleAtLength(pathD, distance, isLoop ? direction : 1);
+}
+
 export type TrainRenderState = {
   train: Train;
   x: number;
@@ -112,10 +121,11 @@ export class TrainSimulation {
           ? routeOctilinear(updatedStations)
           : routeOctilinearOpen(updatedStations);
         if (updatedPathD) {
-          train.displayAngle = pathAngleAtLength(
+          train.displayAngle = trainPathAngle(
             updatedPathD,
             train.distance,
             train.direction,
+            updatedRoute.isLoop,
           );
         }
         continue;
@@ -136,7 +146,12 @@ export class TrainSimulation {
             train.transferCooldown = PASSENGER_TRANSFER_DELAY;
           } else {
             train.stopStationId = null;
-            train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
+            train.displayAngle = trainPathAngle(
+              pathD,
+              train.distance,
+              train.direction,
+              route.isLoop,
+            );
           }
         }
         continue;
@@ -166,16 +181,21 @@ export class TrainSimulation {
             ? routeOctilinear(updatedStations)
             : routeOctilinearOpen(updatedStations);
           if (updatedPathD) {
-            train.displayAngle = pathAngleAtLength(
+            train.displayAngle = trainPathAngle(
               updatedPathD,
               train.distance,
               train.direction,
+              updatedRoute.isLoop,
             );
           }
         } else {
-          train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
+          train.displayAngle = trainPathAngle(
+            pathD,
+            train.distance,
+            train.direction,
+            route.isLoop,
+          );
         }
-        train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
         train.stopStationId = crossed.stationId;
         train.transferCooldown = PASSENGER_TRANSFER_DELAY;
         train.lastStationId = crossed.stationId;
@@ -186,22 +206,20 @@ export class TrainSimulation {
         train.distance = ((nextDistance % totalLength) + totalLength) % totalLength;
         train.displayAngle = lerpAngle(
           train.displayAngle,
-          pathAngleAtLength(pathD, train.distance, train.direction),
+          trainPathAngle(pathD, train.distance, train.direction, true),
           dt,
         );
       } else if (nextDistance >= totalLength) {
         train.distance = totalLength;
         train.direction = -1;
-        train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
       } else if (nextDistance <= 0) {
         train.distance = 0;
         train.direction = 1;
-        train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
       } else {
         train.distance = nextDistance;
         train.displayAngle = lerpAngle(
           train.displayAngle,
-          pathAngleAtLength(pathD, train.distance, train.direction),
+          trainPathAngle(pathD, train.distance, train.direction, false),
           dt,
         );
       }
