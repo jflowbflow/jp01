@@ -100,7 +100,11 @@ export function pathTotalLength(pathD: string): number {
   return path.getTotalLength();
 }
 
-export function pointAtPathLength(pathD: string, distance: number): Point {
+export function pointAtPathLength(
+  pathD: string,
+  distance: number,
+  wrap = true,
+): Point {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("d", pathD);
@@ -109,7 +113,9 @@ export function pointAtPathLength(pathD: string, distance: number): Point {
   const length = path.getTotalLength();
   if (length === 0) return { x: 0, y: 0 };
 
-  const clamped = ((distance % length) + length) % length;
+  const clamped = wrap
+    ? ((distance % length) + length) % length
+    : Math.max(0, Math.min(distance, length));
   const point = path.getPointAtLength(clamped);
   return { x: point.x, y: point.y };
 }

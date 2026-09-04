@@ -38,6 +38,8 @@ type RouteTransition = {
   kind: RouteTransitionKind;
   fromPathD: string;
   toPathD: string | null;
+  fromIsLoop: boolean;
+  toIsLoop: boolean;
   color: string;
   startTime: number;
   duration: number;
@@ -306,21 +308,28 @@ export class MapRenderer {
     return 1 - (1 - t) ** 3;
   }
 
-  private resamplePath(pathD: string, samples: number): Point[] {
+  private resamplePath(pathD: string, samples: number, wrap: boolean): Point[] {
     const total = pathTotalLength(pathD);
     if (total === 0 || samples < 2) return [];
 
     const points: Point[] = [];
     for (let index = 0; index < samples; index += 1) {
-      points.push(pointAtPathLength(pathD, (total * index) / (samples - 1)));
+      const distance = (total * index) / (samples - 1);
+      points.push(pointAtPathLength(pathD, distance, wrap));
     }
     return points;
   }
 
-  private interpolatePathD(fromPathD: string, toPathD: string, t: number): string {
+  private interpolatePathD(
+    fromPathD: string,
+    toPathD: string,
+    t: number,
+    fromIsLoop: boolean,
+    toIsLoop: boolean,
+  ): string {
     const samples = 40;
-    const fromPoints = this.resamplePath(fromPathD, samples);
-    const toPoints = this.resamplePath(toPathD, samples);
+    const fromPoints = this.resamplePath(fromPathD, samples, fromIsLoop);
+    const toPoints = this.resamplePath(toPathD, samples, toIsLoop);
     if (fromPoints.length < 2 || toPoints.length < 2) return toPathD;
 
     const parts = [`M ${fromPoints[0].x + (toPoints[0].x - fromPoints[0].x) * t} ${fromPoints[0].y + (toPoints[0].y - fromPoints[0].y) * t}`];
@@ -352,6 +361,8 @@ export class MapRenderer {
     const fromPathD = this.buildLinePath(line, "active");
     if (!fromPathD) return false;
 
+    const fromIsLoop = line.activeIsLoop;
+
     if (!this.game.removeStationFromLine(stationId, lineId)) return false;
 
     const updatedLine = this.game.getLine(lineId);
@@ -359,6 +370,7 @@ export class MapRenderer {
 
     const willFadeOut = updatedLine.stationIds.length === 0;
     const toPathD = willFadeOut ? null : this.buildLinePath(updatedLine, "pending");
+    const toIsLoop = willFadeOut ? false : updatedLine.isLoop;
 
     if (!willFadeOut && !toPathD) {
       this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
@@ -370,6 +382,8 @@ export class MapRenderer {
       kind: willFadeOut ? "fadeOut" : "reshape",
       fromPathD,
       toPathD,
+      fromIsLoop,
+      toIsLoop,
       color: updatedLine.color,
       startTime: performance.now(),
       duration: willFadeOut ? ROUTE_FADE_MS : ROUTE_RESHAPE_MS,
@@ -399,6 +413,8 @@ export class MapRenderer {
         transition.fromPathD,
         transition.toPathD,
         eased,
+        transition.fromIsLoop,
+        transition.toIsLoop,
       );
       this.appendRouteTrack(
         this.routesGroup,
