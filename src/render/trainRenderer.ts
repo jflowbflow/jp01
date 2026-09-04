@@ -20,9 +20,10 @@ export function createTrainElement(state: TrainRenderState): SVGGElement {
   group.setAttribute("pointer-events", "none");
 
   const scale = state.scale;
+  const mirror = !state.isLoop && state.train.direction < 0;
   group.setAttribute(
     "transform",
-    `translate(${state.x} ${state.y}) rotate(${(state.angle * 180) / Math.PI}) scale(${scale})`,
+    `translate(${state.x} ${state.y}) rotate(${(state.angle * 180) / Math.PI}) scale(${mirror ? -scale : scale} ${scale})`,
   );
 
   const body = document.createElementNS("http://www.w3.org/2000/svg", "rect");

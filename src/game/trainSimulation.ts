@@ -47,6 +47,7 @@ export type TrainRenderState = {
   angle: number;
   color: string;
   scale: number;
+  isLoop: boolean;
 };
 
 export class TrainSimulation {
@@ -217,11 +218,13 @@ export class TrainSimulation {
         train.direction = 1;
       } else {
         train.distance = nextDistance;
-        train.displayAngle = lerpAngle(
-          train.displayAngle,
-          trainPathAngle(pathD, train.distance, train.direction, false),
-          dt,
-        );
+        if (train.direction > 0) {
+          train.displayAngle = lerpAngle(
+            train.displayAngle,
+            trainPathAngle(pathD, train.distance, 1, false),
+            dt,
+          );
+        }
       }
     }
 
@@ -257,6 +260,7 @@ export class TrainSimulation {
         angle: train.displayAngle,
         color: line.color,
         scale,
+        isLoop: route.isLoop,
       });
     }
 

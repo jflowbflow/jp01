@@ -1,5 +1,11 @@
 import { GameState, type DragOrigin } from "../game/GameState.ts";
-import { buildPendingSegments, diffRemovedActiveSegments, isTrainBlockingPendingRoute } from "../game/pendingRoute.ts";
+import {
+  buildPendingSegments,
+  diffNewPendingSegments,
+  diffRemovedActiveSegments,
+  isTrainBlockingPendingRoute,
+  type RouteSegment,
+} from "../game/pendingRoute.ts";
 import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
 import { mapScale, stationRadius } from "../game/stationSpawner.ts";
@@ -31,18 +37,20 @@ const STATION_HIT_PAD = 22;
 const ROUTE_RESHAPE_MS = 360;
 const ROUTE_FADE_MS = 360;
 
-type RouteTransitionKind = "reshape" | "fadeOut";
+type RouteTransitionKind = "fadeOut" | "segmentReshape" | "pathReshape";
 
 type RouteTransition = {
   lineId: string;
   kind: RouteTransitionKind;
-  fromPathD: string;
-  toPathD: string | null;
-  fromIsLoop: boolean;
-  toIsLoop: boolean;
   color: string;
   startTime: number;
   duration: number;
+  fromPathD?: string;
+  toPathD?: string | null;
+  fromIsLoop?: boolean;
+  toIsLoop?: boolean;
+  removedSegmentPaths?: string[];
+  newSegmentPaths?: string[];
 };
 
 type DragState = {
@@ -354,6 +362,27 @@ export class MapRenderer {
     return isLoop ? routeOctilinear(stations) : routeOctilinearOpen(stations);
   }
 
+  private buildSegmentPathD(
+    segment: RouteSegment,
+    stationMap: Map<string, Station>,
+  ): string {
+    const from = stationMap.get(segment.fromId);
+    const to = stationMap.get(segment.toId);
+    if (!from || !to) return "";
+    return routeOctilinearOpen([from, to]);
+  }
+
+  private sortWithActiveLineLast<T>(items: readonly T[], getLineId: (item: T) => string): T[] {
+    const activeId = this.game.getActiveLineId();
+    return [...items].sort((a, b) => {
+      const aIsActive = getLineId(a) === activeId;
+      const bIsActive = getLineId(b) === activeId;
+      if (aIsActive && !bIsActive) return 1;
+      if (!aIsActive && bIsActive) return -1;
+      return 0;
+    });
+  }
+
   private startRouteRemovalTransition(stationId: string, lineId: string): boolean {
     const line = this.game.getLine(lineId);
     if (!line || !line.activeStationIds.includes(stationId)) return false;
@@ -362,6 +391,7 @@ export class MapRenderer {
     if (!fromPathD) return false;
 
     const fromIsLoop = line.activeIsLoop;
+    const stationMap = this.getStationMap();
 
     if (!this.game.removeStationFromLine(stationId, lineId)) return false;
 
@@ -369,24 +399,56 @@ export class MapRenderer {
     if (!updatedLine) return false;
 
     const willFadeOut = updatedLine.stationIds.length === 0;
+    const toIsLoop = updatedLine.isLoop;
     const toPathD = willFadeOut ? null : this.buildLinePath(updatedLine, "pending");
-    const toIsLoop = willFadeOut ? false : updatedLine.isLoop;
 
     if (!willFadeOut && !toPathD) {
       this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
       return true;
     }
 
+    if (willFadeOut) {
+      this.routeTransitions.set(lineId, {
+        lineId,
+        kind: "fadeOut",
+        fromPathD,
+        color: updatedLine.color,
+        startTime: performance.now(),
+        duration: ROUTE_FADE_MS,
+      });
+      return true;
+    }
+
+    if (!fromIsLoop && !toIsLoop) {
+      const removedSegmentPaths = diffRemovedActiveSegments(updatedLine)
+        .map((segment) => this.buildSegmentPathD(segment, stationMap))
+        .filter((pathD) => pathD.length > 0);
+      const newSegmentPaths = diffNewPendingSegments(updatedLine)
+        .map((segment) => this.buildSegmentPathD(segment, stationMap))
+        .filter((pathD) => pathD.length > 0);
+
+      this.routeTransitions.set(lineId, {
+        lineId,
+        kind: "segmentReshape",
+        removedSegmentPaths,
+        newSegmentPaths,
+        color: updatedLine.color,
+        startTime: performance.now(),
+        duration: ROUTE_RESHAPE_MS,
+      });
+      return true;
+    }
+
     this.routeTransitions.set(lineId, {
       lineId,
-      kind: willFadeOut ? "fadeOut" : "reshape",
+      kind: "pathReshape",
       fromPathD,
       toPathD,
       fromIsLoop,
       toIsLoop,
       color: updatedLine.color,
       startTime: performance.now(),
-      duration: willFadeOut ? ROUTE_FADE_MS : ROUTE_RESHAPE_MS,
+      duration: ROUTE_RESHAPE_MS,
     });
 
     return true;
@@ -397,7 +459,7 @@ export class MapRenderer {
     const eased = this.easeOutCubic(progress);
     const lineWidth = this.getLineWidth();
 
-    if (transition.kind === "fadeOut") {
+    if (transition.kind === "fadeOut" && transition.fromPathD) {
       this.appendRouteTrack(
         this.routesGroup,
         transition.fromPathD,
@@ -408,13 +470,56 @@ export class MapRenderer {
       return;
     }
 
-    if (transition.toPathD) {
+    if (transition.kind === "segmentReshape") {
+      const line = this.game.getLine(transition.lineId);
+      if (line) {
+        const removedKeys = new Set(
+          diffRemovedActiveSegments(line).map((segment) =>
+            this.segmentDirectedKey(segment.fromId, segment.toId),
+          ),
+        );
+        this.drawActiveRouteSegments(
+          this.routesGroup,
+          line,
+          transition.color,
+          new Set(),
+          removedKeys,
+        );
+      }
+
+      for (const pathD of transition.removedSegmentPaths ?? []) {
+        this.appendRouteTrack(
+          this.routesGroup,
+          pathD,
+          transition.color,
+          String(0.95 * (1 - eased)),
+          lineWidth * (1 - eased),
+        );
+      }
+
+      for (const pathD of transition.newSegmentPaths ?? []) {
+        this.appendRouteTrack(
+          this.routesGroup,
+          pathD,
+          transition.color,
+          String(0.95 * eased),
+          lineWidth,
+        );
+      }
+      return;
+    }
+
+    if (
+      transition.kind === "pathReshape" &&
+      transition.fromPathD &&
+      transition.toPathD
+    ) {
       const morphedPathD = this.interpolatePathD(
         transition.fromPathD,
         transition.toPathD,
         eased,
-        transition.fromIsLoop,
-        transition.toIsLoop,
+        transition.fromIsLoop ?? false,
+        transition.toIsLoop ?? false,
       );
       this.appendRouteTrack(
         this.routesGroup,
@@ -554,7 +659,10 @@ export class MapRenderer {
       this.drawRouteTransition(transition, now);
     }
 
-    for (const routed of this.activeRoutedLines) {
+    for (const routed of this.sortWithActiveLineLast(
+      this.activeRoutedLines,
+      (entry) => entry.line.id,
+    )) {
       if (this.routeTransitions.has(routed.line.id)) continue;
 
       const line = routed.line;
@@ -601,7 +709,10 @@ export class MapRenderer {
       this.appendRouteTrack(this.routesGroup, routed.pathD, routed.line.color, "0.95");
     }
 
-    for (const line of this.game.getLines()) {
+    for (const line of this.sortWithActiveLineLast(
+      this.game.getLines(),
+      (entry) => entry.id,
+    )) {
       if (this.routeTransitions.has(line.id)) continue;
       if (!this.game.hasPendingRoute(line)) continue;
       if (!this.trainSimulation.getTrain(line.id)) continue;
@@ -627,7 +738,10 @@ export class MapRenderer {
     this.routeHitsGroup.replaceChildren();
     const stationMap = this.getStationMap();
 
-    for (const line of this.game.getLines()) {
+    for (const line of this.sortWithActiveLineLast(
+      this.game.getLines(),
+      (entry) => entry.id,
+    )) {
       if (line.stationIds.length < 2) continue;
 
       const segmentCount = line.isLoop
@@ -744,20 +858,18 @@ export class MapRenderer {
         ? "#e85d5d"
         : isSnapTarget || isDragSource
           ? active.color
-          : lineColors.length === 1
-            ? lineColors[0]
-            : lineColors.length > 1
-              ? "#f0c040"
-              : onActiveLine
-                ? active.color
-                : "#1a1a1e";
+          : onActiveLine
+            ? active.color
+            : lineColors.length > 0
+              ? lineColors[0]
+              : "#1a1a1e";
 
       const strokeScale = this.getMapScale();
       const shape = createStationShape(station.shape, station.x, station.y, radius, {
         fill: hovered || isSnapTarget || isUndoHold ? "#fffdf8" : "#f7f5f0",
         stroke,
         strokeWidth:
-          (isSnapTarget || isUndoHold || lineColors.length > 1 ? 4 : 3) * strokeScale,
+          (isSnapTarget || isUndoHold ? 4 : 3) * strokeScale,
       });
       shape.setAttribute("pointer-events", "none");
       this.stationShapeElements.set(station.id, shape);
@@ -832,7 +944,12 @@ export class MapRenderer {
   private drawTrains(): void {
     this.trainsGroup.replaceChildren();
 
-    for (const state of this.trainSimulation.getRenderStates(this.game, this.getMapScale())) {
+    const states = this.sortWithActiveLineLast(
+      this.trainSimulation.getRenderStates(this.game, this.getMapScale()),
+      (state) => state.train.lineId,
+    );
+
+    for (const state of states) {
       this.trainsGroup.append(createTrainElement(state));
     }
   }
@@ -1095,7 +1212,7 @@ export class MapRenderer {
     this.game.setActiveLine(lineId);
     this.renderLinePicker();
     this.redrawStations();
-    this.drawPreview();
+    this.refresh();
   }
 
   private tryRemoveHold(stationId: string, preferredLineId?: string): void {
