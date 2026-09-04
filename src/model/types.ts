@@ -56,7 +56,8 @@ export type Train = {
   displayAngle: number;
   speed: number;
   passengers: Passenger[];
-  dwellRemaining: number;
+  stopStationId: string | null;
+  transferCooldown: number;
   lastStationId: string | null;
 };
 

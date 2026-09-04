@@ -16,7 +16,7 @@ import {
 } from "./passengerRouting.ts";
 import type { GameState } from "./GameState.ts";
 
-const DWELL_SECONDS = 0.55;
+const PASSENGER_TRANSFER_DELAY = 0.2;
 const STATION_THRESHOLD = 10;
 const TRAIN_SPEED = 48;
 const TRAIN_TURN_RATE = 14;
@@ -96,7 +96,7 @@ export class TrainSimulation {
       if (totalLength === 0) continue;
 
       const atStationId = getTrainAtStationOnLine(train, line, stationMap);
-      const stoppedAtStation = atStationId !== null || train.dwellRemaining > 0;
+      const stoppedAtStation = atStationId !== null || train.stopStationId !== null;
 
       if (
         applyPendingRoutes &&
@@ -121,10 +121,23 @@ export class TrainSimulation {
         continue;
       }
 
-      if (train.dwellRemaining > 0) {
-        train.dwellRemaining = Math.max(0, train.dwellRemaining - dt);
-        if (train.dwellRemaining === 0) {
-          train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
+      if (train.stopStationId) {
+        train.transferCooldown = Math.max(0, train.transferCooldown - dt);
+        if (train.transferCooldown <= 0) {
+          if (
+            this.processOnePassengerTransfer(
+              train,
+              train.stopStationId,
+              game,
+              stationMap,
+            )
+          ) {
+            passengersChanged = true;
+            train.transferCooldown = PASSENGER_TRANSFER_DELAY;
+          } else {
+            train.stopStationId = null;
+            train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
+          }
         }
         continue;
       }
@@ -162,10 +175,9 @@ export class TrainSimulation {
         } else {
           train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
         }
-        if (this.handleStationStop(train, crossed.stationId, game, stationMap)) {
-          passengersChanged = true;
-        }
-        train.dwellRemaining = DWELL_SECONDS;
+        train.displayAngle = pathAngleAtLength(pathD, train.distance, train.direction);
+        train.stopStationId = crossed.stationId;
+        train.transferCooldown = PASSENGER_TRANSFER_DELAY;
         train.lastStationId = crossed.stationId;
         continue;
       }
@@ -241,7 +253,8 @@ export class TrainSimulation {
       displayAngle: 0,
       speed: TRAIN_SPEED,
       passengers: [],
-      dwellRemaining: 0,
+      stopStationId: null,
+      transferCooldown: 0,
       lastStationId: null,
     };
   }
@@ -318,47 +331,57 @@ export class TrainSimulation {
     return ((from - to) % total + total) % total;
   }
 
-  private handleStationStop(
+  private processOnePassengerTransfer(
     train: Train,
     stationId: string,
     game: GameState,
     stationMap: Map<string, Station>,
   ): boolean {
-    let changed = false;
     const station = stationMap.get(stationId);
     if (!station) return false;
 
-    const network = game.getTransitNetwork();
-    const staying = [];
+    if (this.alightOnePassenger(train, stationId, station, game)) return true;
+    return this.boardOnePassenger(train, stationId, game);
+  }
 
-    for (const passenger of train.passengers) {
-      if (!shouldPassengerAlight(passenger, stationId, station.shape)) {
-        staying.push(passenger);
-        continue;
+  private alightOnePassenger(
+    train: Train,
+    stationId: string,
+    station: Station,
+    game: GameState,
+  ): boolean {
+    for (let index = 0; index < train.passengers.length; index += 1) {
+      const passenger = train.passengers[index];
+      if (!shouldPassengerAlight(passenger, stationId, station.shape)) continue;
+
+      train.passengers.splice(index, 1);
+      if (station.shape !== passenger.destinationShape) {
+        advancePassengerAfterAlight(passenger, stationId, station.shape);
+        game.returnPassengerToPlatform(passenger);
       }
-
-      changed = true;
-      if (station.shape === passenger.destinationShape) {
-        continue;
-      }
-
-      advancePassengerAfterAlight(passenger, stationId, station.shape);
-      game.returnPassengerToPlatform(passenger);
+      return true;
     }
 
-    train.passengers = staying;
+    return false;
+  }
 
+  private boardOnePassenger(
+    train: Train,
+    stationId: string,
+    game: GameState,
+  ): boolean {
+    const network = game.getTransitNetwork();
     const waiting = game.getPassengersAtStation(stationId);
 
     for (const passenger of waiting) {
-      if (train.passengers.length >= TRAIN_CAPACITY) break;
+      if (train.passengers.length >= TRAIN_CAPACITY) return false;
       if (!shouldPassengerBoard(passenger, train.lineId, stationId, network)) continue;
       if (game.boardPassenger(passenger.id)) {
         train.passengers.push(passenger);
-        changed = true;
+        return true;
       }
     }
 
-    return changed;
+    return false;
   }
 }
