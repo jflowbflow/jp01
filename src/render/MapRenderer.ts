@@ -55,15 +55,9 @@ type PendingPointer = {
   segmentIndex?: number;
 };
 
-type RemovePicker = {
-  stationId: string;
-  lines: PlayerLine[];
-};
-
 export class MapRenderer {
   private readonly mapEl: HTMLElement;
   private readonly linePickerEl: HTMLElement;
-  private readonly removePickerEl: HTMLElement;
   private readonly game = new GameState();
   private readonly simulation = new Simulation(this.game);
   private readonly trainSimulation = new TrainSimulation();
@@ -82,7 +76,6 @@ export class MapRenderer {
   private drag: DragState | null = null;
   private bounce: BounceState | null = null;
   private pendingPointer: PendingPointer | null = null;
-  private removePicker: RemovePicker | null = null;
   private undoHoldStationId: string | null = null;
   private undoHoldProgress = 0;
   private hoveredStationId: string | null = null;
@@ -92,11 +85,9 @@ export class MapRenderer {
   constructor(
     mapEl: HTMLElement,
     linePickerEl: HTMLElement,
-    removePickerEl: HTMLElement,
   ) {
     this.mapEl = mapEl;
     this.linePickerEl = linePickerEl;
-    this.removePickerEl = removePickerEl;
     this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.svg.setAttribute("viewBox", "0 0 900 560");
     this.svg.setAttribute("role", "img");
@@ -227,8 +218,7 @@ export class MapRenderer {
     return (
       this.drag !== null ||
       this.bounce !== null ||
-      this.pendingPointer !== null ||
-      this.removePicker !== null
+      this.pendingPointer !== null
     );
   }
 
@@ -941,54 +931,24 @@ export class MapRenderer {
     this.drawPreview();
   }
 
-  private showRemovePicker(stationId: string, lines: PlayerLine[]): void {
-    this.removePicker = { stationId, lines };
-    this.removePickerEl.hidden = false;
-    this.removePickerEl.replaceChildren(
-      ...lines.map((line) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.style.background = line.color;
-        button.setAttribute("aria-label", `Remove from ${line.name}`);
-        button.addEventListener("click", () => this.pickRemoveLine(line.id));
-        return button;
-      }),
-    );
-  }
-
-  private hideRemovePicker(): void {
-    this.removePicker = null;
-    this.removePickerEl.hidden = true;
-    this.removePickerEl.replaceChildren();
-  }
-
-  private pickRemoveLine(lineId: string): void {
-    if (!this.removePicker) return;
-
-    const { stationId } = this.removePicker;
-    this.hideRemovePicker();
-    this.clearUndoHold();
-
-    if (this.game.removeStationFromLine(stationId, lineId)) {
-      this.afterRouteChange(lineId);
-      this.finishInteractionRefresh();
-    }
-  }
-
-  private tryRemoveHold(stationId: string): void {
+  private tryRemoveHold(stationId: string, preferredLineId?: string): void {
     const removable = this.game.getRemovableLinesAtStation(stationId);
     if (removable.length === 0) return;
 
     this.clearUndoHold();
 
+    let targetLine: PlayerLine | undefined;
     if (removable.length > 1) {
-      this.showRemovePicker(stationId, removable);
-      this.redrawStations();
-      return;
+      const lineId = preferredLineId ?? this.game.getActiveLineId();
+      targetLine = removable.find((line) => line.id === lineId);
+    } else {
+      targetLine = removable[0];
     }
 
-    if (this.game.removeStationFromLine(stationId, removable[0].id)) {
-      this.afterRouteChange(removable[0].id);
+    if (!targetLine) return;
+
+    if (this.game.removeStationFromLine(stationId, targetLine.id)) {
+      this.afterRouteChange(targetLine.id);
       this.finishInteractionRefresh();
     }
   }
@@ -1050,7 +1010,7 @@ export class MapRenderer {
         if (elapsed >= UNDO_HOLD_MS) {
           this.pendingPointer = null;
           this.clearUndoHold();
-          this.tryRemoveHold(pending.stationId);
+          this.tryRemoveHold(pending.stationId, pending.lineId);
         }
         return;
       }
