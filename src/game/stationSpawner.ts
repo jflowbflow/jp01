@@ -154,9 +154,16 @@ export function pickStationShape(
   if (forceShape) return forceShape;
 
   const unlocked = getUnlockedShapes(shapeCounts);
-  let roll = Math.random() * unlocked.length * (unlocked.length + 1) * 0.5;
+  const weights = unlocked.map((shape) => {
+    if (shape === "circle") return 5;
+    if (shape === "triangle") return 4;
+    if (shape === "square") return 2;
+    return 1;
+  });
+
+  let roll = Math.random() * weights.reduce((sum, weight) => sum + weight, 0);
   for (let i = 0; i < unlocked.length; i += 1) {
-    roll -= i + 1;
+    roll -= weights[i];
     if (roll <= 0) return unlocked[i];
   }
   return unlocked[unlocked.length - 1];

@@ -1,5 +1,4 @@
 import {
-  INITIAL_STATION_COUNT,
   lineDefinitions,
   MAX_STATIONS,
 } from "../data/network.ts";
@@ -41,6 +40,8 @@ type ActiveRoute = {
 
 const MIN_LOOP_STATIONS = 3;
 
+const INITIAL_STATION_SHAPES: StationShape[] = ["circle", "circle", "triangle"];
+
 export class GameState {
   private readonly lines: PlayerLine[];
   private activeLineId: string;
@@ -63,8 +64,14 @@ export class GameState {
     }));
     this.activeLineId = this.lines[0].id;
 
-    for (let i = 0; i < INITIAL_STATION_COUNT; i += 1) {
-      this.spawnStation("circle");
+    const initialShapes = [...INITIAL_STATION_SHAPES];
+    for (let i = initialShapes.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [initialShapes[i], initialShapes[j]] = [initialShapes[j], initialShapes[i]];
+    }
+
+    for (const shape of initialShapes) {
+      this.spawnStation(shape);
     }
   }
 

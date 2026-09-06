@@ -163,7 +163,9 @@ export class TrainSimulation {
             train.transferCooldown = PASSENGER_TRANSFER_DELAY;
           } else {
             train.stopStationId = null;
-            snapTrainAngle(train, pathD, train.direction, route.isLoop);
+            if (route.isLoop) {
+              snapTrainAngle(train, pathD, train.direction, true);
+            }
           }
         }
         continue;
@@ -195,8 +197,8 @@ export class TrainSimulation {
           if (updatedPathD) {
             snapTrainAngle(train, updatedPathD, train.direction, updatedRoute.isLoop);
           }
-        } else {
-          snapTrainAngle(train, pathD, train.direction, route.isLoop);
+        } else if (route.isLoop) {
+          snapTrainAngle(train, pathD, train.direction, true);
         }
         train.stopStationId = crossed.stationId;
         train.transferCooldown = PASSENGER_TRANSFER_DELAY;
@@ -211,13 +213,11 @@ export class TrainSimulation {
         train.distance = totalLength;
         if (train.direction > 0) {
           train.direction = -1;
-          snapTrainAngle(train, pathD, train.direction, false);
         }
       } else if (nextDistance <= 0) {
         train.distance = 0;
         if (train.direction < 0) {
           train.direction = 1;
-          snapTrainAngle(train, pathD, train.direction, false);
         }
       } else {
         train.distance = nextDistance;

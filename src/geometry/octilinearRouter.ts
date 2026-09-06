@@ -149,8 +149,7 @@ export function pathAngleAtLength(
   if (length === 0) return 0;
 
   if (!wrap) {
-    const tangent = openPathTangent(pathD, distance);
-    return direction > 0 ? tangent : tangent + Math.PI;
+    return openPathTangent(pathD, distance);
   }
 
   const sample = Math.min(4, length * 0.02);
