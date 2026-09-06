@@ -35,9 +35,28 @@ function trainPathAngle(
   pathD: string,
   distance: number,
   direction: 1 | -1,
-  isLoop: boolean,
 ): number {
-  return pathAngleAtLength(pathD, distance, isLoop ? direction : 1);
+  return pathAngleAtLength(pathD, distance, direction);
+}
+
+function snapTrainAngle(
+  train: Train,
+  pathD: string,
+  direction: 1 | -1,
+): void {
+  train.displayAngle = trainPathAngle(pathD, train.distance, direction);
+}
+
+function updateTrainAngle(
+  train: Train,
+  pathD: string,
+  dt: number,
+): void {
+  train.displayAngle = lerpAngle(
+    train.displayAngle,
+    trainPathAngle(pathD, train.distance, train.direction),
+    dt,
+  );
 }
 
 export type TrainRenderState = {
@@ -47,7 +66,6 @@ export type TrainRenderState = {
   angle: number;
   color: string;
   scale: number;
-  isLoop: boolean;
 };
 
 export class TrainSimulation {
@@ -122,12 +140,7 @@ export class TrainSimulation {
           ? routeOctilinear(updatedStations)
           : routeOctilinearOpen(updatedStations);
         if (updatedPathD) {
-          train.displayAngle = trainPathAngle(
-            updatedPathD,
-            train.distance,
-            train.direction,
-            updatedRoute.isLoop,
-          );
+          snapTrainAngle(train, updatedPathD, train.direction);
         }
         continue;
       }
@@ -147,12 +160,7 @@ export class TrainSimulation {
             train.transferCooldown = PASSENGER_TRANSFER_DELAY;
           } else {
             train.stopStationId = null;
-            train.displayAngle = trainPathAngle(
-              pathD,
-              train.distance,
-              train.direction,
-              route.isLoop,
-            );
+            snapTrainAngle(train, pathD, train.direction);
           }
         }
         continue;
@@ -182,20 +190,10 @@ export class TrainSimulation {
             ? routeOctilinear(updatedStations)
             : routeOctilinearOpen(updatedStations);
           if (updatedPathD) {
-            train.displayAngle = trainPathAngle(
-              updatedPathD,
-              train.distance,
-              train.direction,
-              updatedRoute.isLoop,
-            );
+            snapTrainAngle(train, updatedPathD, train.direction);
           }
         } else {
-          train.displayAngle = trainPathAngle(
-            pathD,
-            train.distance,
-            train.direction,
-            route.isLoop,
-          );
+          snapTrainAngle(train, pathD, train.direction);
         }
         train.stopStationId = crossed.stationId;
         train.transferCooldown = PASSENGER_TRANSFER_DELAY;
@@ -205,26 +203,22 @@ export class TrainSimulation {
 
       if (route.isLoop) {
         train.distance = ((nextDistance % totalLength) + totalLength) % totalLength;
-        train.displayAngle = lerpAngle(
-          train.displayAngle,
-          trainPathAngle(pathD, train.distance, train.direction, true),
-          dt,
-        );
+        updateTrainAngle(train, pathD, dt);
       } else if (nextDistance >= totalLength) {
         train.distance = totalLength;
-        train.direction = -1;
+        if (train.direction > 0) {
+          train.direction = -1;
+          snapTrainAngle(train, pathD, train.direction);
+        }
       } else if (nextDistance <= 0) {
         train.distance = 0;
-        train.direction = 1;
+        if (train.direction < 0) {
+          train.direction = 1;
+          snapTrainAngle(train, pathD, train.direction);
+        }
       } else {
         train.distance = nextDistance;
-        if (train.direction > 0) {
-          train.displayAngle = lerpAngle(
-            train.displayAngle,
-            trainPathAngle(pathD, train.distance, 1, false),
-            dt,
-          );
-        }
+        updateTrainAngle(train, pathD, dt);
       }
     }
 
@@ -260,7 +254,6 @@ export class TrainSimulation {
         angle: train.displayAngle,
         color: line.color,
         scale,
-        isLoop: route.isLoop,
       });
     }
 
