@@ -120,17 +120,42 @@ export function pointAtPathLength(
   return { x: point.x, y: point.y };
 }
 
-export function pathAngleAtLength(
-  pathD: string,
-  distance: number,
-  direction: 1 | -1 = 1,
-): number {
+function openPathTangent(pathD: string, distance: number): number {
   const length = pathTotalLength(pathD);
   if (length === 0) return 0;
 
   const sample = Math.min(4, length * 0.02);
-  const p1 = pointAtPathLength(pathD, distance);
-  const p2 = pointAtPathLength(pathD, distance + sample * direction);
+  const clamped = Math.max(0, Math.min(distance, length));
+
+  let from = clamped;
+  let to = clamped + sample;
+  if (to > length) {
+    to = clamped;
+    from = Math.max(0, clamped - sample);
+  }
+
+  const p1 = pointAtPathLength(pathD, from, false);
+  const p2 = pointAtPathLength(pathD, to, false);
+  return Math.atan2(p2.y - p1.y, p2.x - p1.x);
+}
+
+export function pathAngleAtLength(
+  pathD: string,
+  distance: number,
+  direction: 1 | -1 = 1,
+  wrap = true,
+): number {
+  const length = pathTotalLength(pathD);
+  if (length === 0) return 0;
+
+  if (!wrap) {
+    const tangent = openPathTangent(pathD, distance);
+    return direction > 0 ? tangent : tangent + Math.PI;
+  }
+
+  const sample = Math.min(4, length * 0.02);
+  const p1 = pointAtPathLength(pathD, distance, true);
+  const p2 = pointAtPathLength(pathD, distance + sample * direction, true);
   return Math.atan2(p2.y - p1.y, p2.x - p1.x);
 }
 
