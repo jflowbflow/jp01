@@ -6,9 +6,14 @@ import {
   routeOctilinearOpen,
   stationStopsOnPath,
 } from "../geometry/octilinearRouter.ts";
-import type { Station, Train } from "../model/types.ts";
-import { TRAIN_CAPACITY } from "../model/types.ts";
-import { getTrainAtStationOnLine, isTrainBlockingPendingRoute } from "./pendingRoute.ts";
+import type { Point, Station, Train, UpgradeType } from "../model/types.ts";
+import {
+  BASE_TRAIN_CAPACITY,
+  BASE_TRAIN_SPEED,
+  CARRIAGE_CAPACITY_BONUS,
+  THRUSTER_SPEED_BONUS,
+} from "../model/types.ts";
+import { getTrainAtStationOnLine, isTrainBlockingPendingRoute, remapTrainToPendingRoute } from "./pendingRoute.ts";
 import {
   advancePassengerAfterAlight,
   shouldPassengerAlight,
@@ -18,7 +23,6 @@ import type { GameState } from "./GameState.ts";
 
 const PASSENGER_TRANSFER_DELAY = 0.2;
 const STATION_THRESHOLD = 10;
-const TRAIN_SPEED = 48;
 const TRAIN_TURN_RATE = 14;
 
 function lerpAngle(current: number, target: number, dt: number): number {
@@ -73,22 +77,102 @@ export type TrainRenderState = {
 
 export class TrainSimulation {
   private readonly trains = new Map<string, Train>();
+  private nextTrainIndex = 1;
 
   getTrains(): readonly Train[] {
     return [...this.trains.values()];
   }
 
-  getTrain(lineId: string): Train | undefined {
-    return this.trains.get(lineId);
+  getTrainsOnLine(lineId: string): Train[] {
+    return this.getTrains().filter((train) => train.lineId === lineId);
+  }
+
+  getTrain(trainId: string): Train | undefined {
+    return this.trains.get(trainId);
   }
 
   shouldShowPendingFade(lineId: string, game: GameState): boolean {
     const line = game.getLine(lineId);
-    const train = this.trains.get(lineId);
-    if (!line || !train || !game.hasPendingRoute(line)) return false;
+    if (!line || !game.hasPendingRoute(line)) return false;
 
     const stationMap = new Map(game.getStations().map((station) => [station.id, station]));
-    return isTrainBlockingPendingRoute(train, line, stationMap);
+    return this.getTrainsOnLine(lineId).some((train) =>
+      isTrainBlockingPendingRoute(train, line, stationMap),
+    );
+  }
+
+  getRepresentativeTrain(lineId: string): Train | undefined {
+    return this.getTrainsOnLine(lineId)[0];
+  }
+
+  remapAllTrainsOnLine(lineId: string, game: GameState): void {
+    const line = game.getLine(lineId);
+    if (!line) return;
+
+    const stationMap = new Map(game.getStations().map((station) => [station.id, station]));
+    for (const train of this.getTrainsOnLine(lineId)) {
+      remapTrainToPendingRoute(train, line, stationMap);
+    }
+  }
+
+  applyUpgradeToNearestTrain(
+    lineId: string,
+    upgrade: UpgradeType,
+    dropPoint: Point,
+    game: GameState,
+  ): boolean {
+    const line = game.getLine(lineId);
+    if (!line || line.activeStationIds.length < 2) return false;
+
+    const lineTrains = this.getTrainsOnLine(lineId);
+    if (lineTrains.length === 0) return false;
+
+    const stationMap = new Map(game.getStations().map((s) => [s.id, s]));
+    const route = game.getActiveRoute(line);
+    const stations = route.stationIds
+      .map((id) => stationMap.get(id))
+      .filter((station): station is Station => Boolean(station));
+
+    const pathD = route.isLoop
+      ? routeOctilinear(stations)
+      : routeOctilinearOpen(stations);
+    if (!pathD) return false;
+
+    let nearestTrain = lineTrains[0];
+    let nearestGap = Infinity;
+
+    for (const train of lineTrains) {
+      const point = pointAtPathLength(pathD, train.distance, route.isLoop);
+      const gap = Math.hypot(point.x - dropPoint.x, point.y - dropPoint.y);
+      if (gap < nearestGap) {
+        nearestGap = gap;
+        nearestTrain = train;
+      }
+    }
+
+    if (upgrade === "thruster") {
+      nearestTrain.speed += THRUSTER_SPEED_BONUS;
+      return true;
+    }
+
+    if (upgrade === "carriage") {
+      nearestTrain.capacity += CARRIAGE_CAPACITY_BONUS;
+      return true;
+    }
+
+    if (upgrade === "train") {
+      const totalLength = pathTotalLength(pathD);
+      const offset = totalLength / (lineTrains.length + 1);
+      const newTrain = this.createTrain(lineId, {
+        distance: offset * lineTrains.length,
+        direction: lineTrains.length % 2 === 0 ? 1 : -1,
+      });
+      this.trains.set(newTrain.id, newTrain);
+      snapTrainAngle(newTrain, pathD, newTrain.direction, route.isLoop);
+      return true;
+    }
+
+    return false;
   }
 
   update(
@@ -96,21 +180,28 @@ export class TrainSimulation {
     game: GameState,
     options: { applyPendingRoutes?: boolean } = {},
   ): { passengersChanged: boolean; routeApplied: boolean } {
+    if (game.hasPendingUpgradeChoice()) {
+      return { passengersChanged: false, routeApplied: false };
+    }
+
     const applyPendingRoutes = options.applyPendingRoutes ?? true;
     let passengersChanged = false;
     let routeApplied = false;
 
     for (const line of game.getLines()) {
       if (line.activeStationIds.length < 2) {
-        this.trains.delete(line.id);
+        for (const train of this.getTrainsOnLine(line.id)) {
+          this.trains.delete(train.id);
+        }
         continue;
       }
 
-      if (!this.trains.has(line.id)) {
-        this.trains.set(line.id, this.createTrain(line.id));
+      if (this.getTrainsOnLine(line.id).length === 0) {
+        const train = this.createTrain(line.id);
+        this.trains.set(train.id, train);
       }
 
-      const train = this.trains.get(line.id)!;
+      const lineTrains = this.getTrainsOnLine(line.id);
       const route = game.getActiveRoute(line);
       const stationMap = new Map(game.getStations().map((s) => [s.id, s]));
       const stations = route.stationIds
@@ -126,15 +217,98 @@ export class TrainSimulation {
       const totalLength = pathTotalLength(pathD);
       if (totalLength === 0) continue;
 
-      const atStationId = getTrainAtStationOnLine(train, line, stationMap);
-      const stoppedAtStation = atStationId !== null || train.stopStationId !== null;
+      for (const train of lineTrains) {
+        const result = this.updateTrain(
+          train,
+          line,
+          pathD,
+          totalLength,
+          route.isLoop,
+          stations,
+          stationMap,
+          game,
+          dt,
+          applyPendingRoutes,
+        );
+        if (result.passengersChanged) passengersChanged = true;
+        if (result.routeApplied) routeApplied = true;
+      }
+    }
 
-      if (
-        applyPendingRoutes &&
-        stoppedAtStation &&
-        game.tryApplyPendingRoute(line.id, train)
-      ) {
-        routeApplied = true;
+    return { passengersChanged, routeApplied };
+  }
+
+  private updateTrain(
+    train: Train,
+    line: NonNullable<ReturnType<GameState["getLine"]>>,
+    pathD: string,
+    totalLength: number,
+    isLoop: boolean,
+    stations: Station[],
+    stationMap: Map<string, Station>,
+    game: GameState,
+    dt: number,
+    applyPendingRoutes: boolean,
+  ): { passengersChanged: boolean; routeApplied: boolean } {
+    const atStationId = getTrainAtStationOnLine(train, line, stationMap);
+    const stoppedAtStation = atStationId !== null || train.stopStationId !== null;
+
+    if (
+      applyPendingRoutes &&
+      stoppedAtStation &&
+      game.tryApplyPendingRoute(line.id, train)
+    ) {
+      const updatedRoute = game.getActiveRoute(line);
+      const updatedStations = updatedRoute.stationIds
+        .map((id) => stationMap.get(id))
+        .filter((station): station is Station => Boolean(station));
+      const updatedPathD = updatedRoute.isLoop
+        ? routeOctilinear(updatedStations)
+        : routeOctilinearOpen(updatedStations);
+      if (updatedPathD) {
+        snapTrainAngle(train, updatedPathD, train.direction, updatedRoute.isLoop);
+      }
+      return { passengersChanged: false, routeApplied: true };
+    }
+
+    if (train.stopStationId) {
+      train.transferCooldown = Math.max(0, train.transferCooldown - dt);
+      if (train.transferCooldown <= 0) {
+        if (
+          this.processOnePassengerTransfer(
+            train,
+            train.stopStationId,
+            game,
+            stationMap,
+          )
+        ) {
+          train.transferCooldown = PASSENGER_TRANSFER_DELAY;
+          return { passengersChanged: true, routeApplied: false };
+        }
+
+        train.stopStationId = null;
+        if (isLoop) {
+          snapTrainAngle(train, pathD, train.direction, true);
+        }
+      }
+      return { passengersChanged: false, routeApplied: false };
+    }
+
+    const step = train.speed * dt;
+    const nextDistance = train.distance + step * train.direction;
+    const stops = stationStopsOnPath(pathD, stations);
+    const crossed = this.findCrossedStop(
+      train,
+      stops,
+      train.distance,
+      nextDistance,
+      totalLength,
+      isLoop,
+    );
+
+    if (crossed) {
+      train.distance = crossed.distance;
+      if (applyPendingRoutes && game.tryApplyPendingRoute(line.id, train)) {
         const updatedRoute = game.getActiveRoute(line);
         const updatedStations = updatedRoute.stationIds
           .map((id) => stationMap.get(id))
@@ -145,87 +319,40 @@ export class TrainSimulation {
         if (updatedPathD) {
           snapTrainAngle(train, updatedPathD, train.direction, updatedRoute.isLoop);
         }
-        continue;
-      }
-
-      if (train.stopStationId) {
-        train.transferCooldown = Math.max(0, train.transferCooldown - dt);
-        if (train.transferCooldown <= 0) {
-          if (
-            this.processOnePassengerTransfer(
-              train,
-              train.stopStationId,
-              game,
-              stationMap,
-            )
-          ) {
-            passengersChanged = true;
-            train.transferCooldown = PASSENGER_TRANSFER_DELAY;
-          } else {
-            train.stopStationId = null;
-            if (route.isLoop) {
-              snapTrainAngle(train, pathD, train.direction, true);
-            }
-          }
-        }
-        continue;
-      }
-
-      const step = train.speed * dt;
-      const nextDistance = train.distance + step * train.direction;
-      const stops = stationStopsOnPath(pathD, stations);
-      const crossed = this.findCrossedStop(
-        train,
-        stops,
-        train.distance,
-        nextDistance,
-        totalLength,
-        route.isLoop,
-      );
-
-      if (crossed) {
-        train.distance = crossed.distance;
-        if (applyPendingRoutes && game.tryApplyPendingRoute(line.id, train)) {
-          routeApplied = true;
-          const updatedRoute = game.getActiveRoute(line);
-          const updatedStations = updatedRoute.stationIds
-            .map((id) => stationMap.get(id))
-            .filter((station): station is Station => Boolean(station));
-          const updatedPathD = updatedRoute.isLoop
-            ? routeOctilinear(updatedStations)
-            : routeOctilinearOpen(updatedStations);
-          if (updatedPathD) {
-            snapTrainAngle(train, updatedPathD, train.direction, updatedRoute.isLoop);
-          }
-        } else if (route.isLoop) {
-          snapTrainAngle(train, pathD, train.direction, true);
-        }
         train.stopStationId = crossed.stationId;
         train.transferCooldown = PASSENGER_TRANSFER_DELAY;
         train.lastStationId = crossed.stationId;
-        continue;
+        return { passengersChanged: false, routeApplied: true };
       }
 
-      if (route.isLoop) {
-        train.distance = ((nextDistance % totalLength) + totalLength) % totalLength;
-        updateTrainAngle(train, pathD, true, dt);
-      } else if (nextDistance >= totalLength) {
-        train.distance = totalLength;
-        if (train.direction > 0) {
-          train.direction = -1;
-        }
-      } else if (nextDistance <= 0) {
-        train.distance = 0;
-        if (train.direction < 0) {
-          train.direction = 1;
-        }
-      } else {
-        train.distance = nextDistance;
-        updateTrainAngle(train, pathD, false, dt);
+      if (isLoop) {
+        snapTrainAngle(train, pathD, train.direction, true);
       }
+      train.stopStationId = crossed.stationId;
+      train.transferCooldown = PASSENGER_TRANSFER_DELAY;
+      train.lastStationId = crossed.stationId;
+      return { passengersChanged: false, routeApplied: false };
     }
 
-    return { passengersChanged, routeApplied };
+    if (isLoop) {
+      train.distance = ((nextDistance % totalLength) + totalLength) % totalLength;
+      updateTrainAngle(train, pathD, true, dt);
+    } else if (nextDistance >= totalLength) {
+      train.distance = totalLength;
+      if (train.direction > 0) {
+        train.direction = -1;
+      }
+    } else if (nextDistance <= 0) {
+      train.distance = 0;
+      if (train.direction < 0) {
+        train.direction = 1;
+      }
+    } else {
+      train.distance = nextDistance;
+      updateTrainAngle(train, pathD, false, dt);
+    }
+
+    return { passengersChanged: false, routeApplied: false };
   }
 
   getRenderStates(game: GameState, scale: number): TrainRenderState[] {
@@ -263,13 +390,20 @@ export class TrainSimulation {
     return states;
   }
 
-  private createTrain(lineId: string): Train {
+  private createTrain(
+    lineId: string,
+    options: { distance?: number; direction?: 1 | -1 } = {},
+  ): Train {
+    const id = `${lineId}-t${this.nextTrainIndex}`;
+    this.nextTrainIndex += 1;
     return {
+      id,
       lineId,
-      distance: 0,
-      direction: 1,
+      distance: options.distance ?? 0,
+      direction: options.direction ?? 1,
       displayAngle: 0,
-      speed: TRAIN_SPEED,
+      speed: BASE_TRAIN_SPEED,
+      capacity: BASE_TRAIN_CAPACITY,
       passengers: [],
       stopStationId: null,
       transferCooldown: 0,
@@ -373,7 +507,9 @@ export class TrainSimulation {
       if (!shouldPassengerAlight(passenger, stationId, station.shape)) continue;
 
       train.passengers.splice(index, 1);
-      if (station.shape !== passenger.destinationShape) {
+      if (station.shape === passenger.destinationShape) {
+        game.recordDelivery();
+      } else {
         advancePassengerAfterAlight(passenger, stationId, station.shape);
         game.returnPassengerToPlatform(passenger);
       }
@@ -392,7 +528,7 @@ export class TrainSimulation {
     const waiting = game.getPassengersAtStation(stationId);
 
     for (const passenger of waiting) {
-      if (train.passengers.length >= TRAIN_CAPACITY) return false;
+      if (train.passengers.length >= train.capacity) return false;
       if (!shouldPassengerBoard(passenger, train.lineId, stationId, network)) continue;
       if (game.boardPassenger(passenger.id)) {
         train.passengers.push(passenger);

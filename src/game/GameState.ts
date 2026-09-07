@@ -18,7 +18,9 @@ import {
   remapTrainToPendingRoute,
 } from "./pendingRoute.ts";
 import { planPassengerRoute, type TransitNetwork } from "./passengerRouting.ts";
-import type { Passenger, PlayerLine, Station, StationShape, Train } from "../model/types.ts";
+import { shuffleUpgradeChoices } from "./upgradeSystem.ts";
+import type { Passenger, PlayerLine, Station, StationShape, Train, UpgradeType } from "../model/types.ts";
+import { PASSENGERS_PER_UPGRADE } from "../model/types.ts";
 
 export type DragMode = "extend" | "insert" | "new" | "unloop";
 export type ExtendEnd = "head" | "tail";
@@ -53,6 +55,9 @@ export class GameState {
   private readonly usedNames = new Set<string>();
   private week = 1;
   private elapsedSeconds = 0;
+  private deliveredCount = 0;
+  private upgradeInventory: UpgradeType[] = [];
+  private pendingUpgradeChoices: UpgradeType[] | null = null;
 
   constructor() {
     this.lines = lineDefinitions.map((definition) => ({
@@ -126,6 +131,48 @@ export class GameState {
 
   getWeek(): number {
     return this.week;
+  }
+
+  getDeliveredCount(): number {
+    return this.deliveredCount;
+  }
+
+  getPassengersUntilUpgrade(): number {
+    const remainder = this.deliveredCount % PASSENGERS_PER_UPGRADE;
+    return PASSENGERS_PER_UPGRADE - remainder;
+  }
+
+  getUpgradeInventory(): readonly UpgradeType[] {
+    return this.upgradeInventory;
+  }
+
+  getPendingUpgradeChoices(): readonly UpgradeType[] | null {
+    return this.pendingUpgradeChoices;
+  }
+
+  hasPendingUpgradeChoice(): boolean {
+    return this.pendingUpgradeChoices !== null;
+  }
+
+  recordDelivery(): void {
+    this.deliveredCount += 1;
+    if (this.deliveredCount % PASSENGERS_PER_UPGRADE === 0) {
+      this.pendingUpgradeChoices = shuffleUpgradeChoices();
+    }
+  }
+
+  selectUpgradeChoice(upgrade: UpgradeType): boolean {
+    if (!this.pendingUpgradeChoices?.includes(upgrade)) return false;
+    this.upgradeInventory.push(upgrade);
+    this.pendingUpgradeChoices = null;
+    return true;
+  }
+
+  consumeUpgrade(upgrade: UpgradeType): boolean {
+    const index = this.upgradeInventory.indexOf(upgrade);
+    if (index < 0) return false;
+    this.upgradeInventory.splice(index, 1);
+    return true;
   }
 
   getUnlockedShapes(): StationShape[] {

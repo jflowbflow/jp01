@@ -23,7 +23,9 @@ import {
   passengerOffset,
 } from "./stationShapes.ts";
 import { createTrainElement } from "./trainRenderer.ts";
+import { UpgradeUI } from "./upgradeUI.ts";
 import { MapViewport } from "./viewport.ts";
+import type { UpgradeType } from "../model/types.ts";
 
 const LINE_WIDTH = 11;
 const ROUTE_HIT_WIDTH = 35;
@@ -86,6 +88,7 @@ export class MapRenderer {
   private readonly game = new GameState();
   private readonly simulation = new Simulation(this.game);
   private readonly trainSimulation = new TrainSimulation();
+  private readonly upgradeUI: UpgradeUI;
   private readonly viewport = new MapViewport();
   private readonly svg: SVGSVGElement;
   private readonly routesGroup: SVGGElement;
@@ -109,11 +112,17 @@ export class MapRenderer {
   private routeTransitions = new Map<string, RouteTransition>();
 
   constructor(
+    appEl: HTMLElement,
     mapEl: HTMLElement,
     linePickerEl: HTMLElement,
   ) {
     this.mapEl = mapEl;
     this.linePickerEl = linePickerEl;
+    this.upgradeUI = new UpgradeUI(appEl, {
+      onUpgradeSelected: (upgrade) => this.handleUpgradeSelected(upgrade),
+      onUpgradeDropped: (upgrade, clientX, clientY) =>
+        this.handleUpgradeDropped(upgrade, clientX, clientY),
+    });
     this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.svg.setAttribute("viewBox", "0 0 900 560");
     this.svg.setAttribute("role", "img");
@@ -150,6 +159,7 @@ export class MapRenderer {
     this.redrawStations();
     this.drawPassengers();
     this.refresh();
+    this.syncUpgradeUI();
     this.startAnimation();
 
     window.addEventListener("keydown", this.onKeyDown);
@@ -245,8 +255,90 @@ export class MapRenderer {
       this.drag !== null ||
       this.bounce !== null ||
       this.pendingPointer !== null ||
-      this.routeTransitions.size > 0
+      this.routeTransitions.size > 0 ||
+      this.upgradeUI.isDragging() ||
+      this.game.hasPendingUpgradeChoice()
     );
+  }
+
+  private syncUpgradeUI(): void {
+    this.upgradeUI.updateDeliveryCount(
+      this.game.getDeliveredCount(),
+      this.game.getPassengersUntilUpgrade(),
+    );
+    this.upgradeUI.renderInventory(this.game.getUpgradeInventory());
+
+    if (this.game.hasPendingUpgradeChoice() && !this.upgradeUI.isModalVisible()) {
+      const choices = this.game.getPendingUpgradeChoices();
+      if (choices) this.upgradeUI.showUpgradeChoices(choices);
+    }
+  }
+
+  private handleUpgradeSelected(upgrade: UpgradeType): void {
+    this.game.selectUpgradeChoice(upgrade);
+    this.syncUpgradeUI();
+  }
+
+  private handleUpgradeDropped(
+    upgrade: UpgradeType,
+    clientX: number,
+    clientY: number,
+  ): void {
+    const lineId = this.findLineAtClientPoint(clientX, clientY);
+    if (!lineId) return;
+
+    const inventory = this.game.getUpgradeInventory();
+    if (!inventory.includes(upgrade)) return;
+
+    const dropPoint = this.clientToWorld(clientX, clientY);
+    if (
+      this.trainSimulation.applyUpgradeToNearestTrain(
+        lineId,
+        upgrade,
+        dropPoint,
+        this.game,
+      )
+    ) {
+      this.game.consumeUpgrade(upgrade);
+      this.syncUpgradeUI();
+      this.drawTrains();
+    }
+  }
+
+  private findLineAtClientPoint(clientX: number, clientY: number): string | null {
+    const point = this.clientToWorld(clientX, clientY);
+    const hitThreshold = this.getRouteHitWidth();
+    let bestLineId: string | null = null;
+    let bestGap = Infinity;
+
+    for (const routed of this.activeRoutedLines) {
+      const total = routed.totalLength;
+      if (total === 0) continue;
+
+      const samples = Math.max(48, Math.ceil(total / 6));
+      for (let index = 0; index <= samples; index += 1) {
+        const distance = (total * index) / samples;
+        const sample = pointAtPathLength(
+          routed.pathD,
+          distance,
+          routed.line.activeIsLoop,
+        );
+        const gap = Math.hypot(sample.x - point.x, sample.y - point.y);
+        if (gap < bestGap) {
+          bestGap = gap;
+          bestLineId = routed.line.id;
+        }
+      }
+    }
+
+    return bestGap <= hitThreshold ? bestLineId : null;
+  }
+
+  private finalizeLineRoute(lineId: string): void {
+    const train = this.trainSimulation.getRepresentativeTrain(lineId);
+    if (this.game.tryApplyPendingRoute(lineId, train)) {
+      this.trainSimulation.remapAllTrainsOnLine(lineId, this.game);
+    }
   }
 
   private refresh(): void {
@@ -403,7 +495,7 @@ export class MapRenderer {
     const toPathD = willFadeOut ? null : this.buildLinePath(updatedLine, "pending");
 
     if (!willFadeOut && !toPathD) {
-      this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
+      this.finalizeLineRoute(lineId);
       return true;
     }
 
@@ -537,7 +629,7 @@ export class MapRenderer {
     for (const [lineId, transition] of this.routeTransitions) {
       if (now - transition.startTime < transition.duration) continue;
 
-      this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
+      this.finalizeLineRoute(lineId);
       this.routeTransitions.delete(lineId);
       completed = true;
     }
@@ -666,11 +758,11 @@ export class MapRenderer {
       if (this.routeTransitions.has(routed.line.id)) continue;
 
       const line = routed.line;
-      const train = this.trainSimulation.getTrain(line.id);
+      const trains = this.trainSimulation.getTrainsOnLine(line.id);
       const fadeOldSegments =
-        train !== undefined &&
+        trains.length > 0 &&
         this.game.hasPendingRoute(line) &&
-        isTrainBlockingPendingRoute(train, line, stationMap);
+        trains.some((train) => isTrainBlockingPendingRoute(train, line, stationMap));
 
       if (fadeOldSegments) {
         const removedSegments = diffRemovedActiveSegments(line);
@@ -715,7 +807,7 @@ export class MapRenderer {
     )) {
       if (this.routeTransitions.has(line.id)) continue;
       if (!this.game.hasPendingRoute(line)) continue;
-      if (!this.trainSimulation.getTrain(line.id)) continue;
+      if (!this.trainSimulation.getTrainsOnLine(line.id).length) continue;
 
       if (this.isTwoNodeSegmentReshape(line)) {
         const pendingStations = line.stationIds
@@ -1070,7 +1162,7 @@ export class MapRenderer {
     }
     for (const line of this.game.getLines()) {
       if (this.routeTransitions.has(line.id)) continue;
-      this.game.finalizeRouteChange(line.id, this.trainSimulation.getTrain(line.id));
+      this.finalizeLineRoute(line.id);
     }
     this.renderLinePicker();
     this.redrawStations();
@@ -1079,7 +1171,7 @@ export class MapRenderer {
 
   private afterRouteChange(lineId: string): void {
     if (this.isInteracting() || this.routeTransitions.has(lineId)) return;
-    this.game.finalizeRouteChange(lineId, this.trainSimulation.getTrain(lineId));
+    this.finalizeLineRoute(lineId);
   }
 
   private tryAutoAnchor(): void {
@@ -1177,9 +1269,9 @@ export class MapRenderer {
     if (!origin) return false;
 
     const line = this.game.getLine(lineId);
-    const train = this.trainSimulation.getTrain(lineId);
+    const train = this.trainSimulation.getRepresentativeTrain(lineId);
     if (line && (!train || !isTrainBlockingPendingRoute(train, line, this.getStationMap()))) {
-      this.game.finalizeRouteChange(lineId, train);
+      this.finalizeLineRoute(lineId);
     }
 
     const point = tip ?? this.clientToWorld(clientX, clientY);
@@ -1308,7 +1400,15 @@ export class MapRenderer {
   }
 
   private onPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0 || this.drag || this.bounce) return;
+    if (
+      event.button !== 0 ||
+      this.drag ||
+      this.bounce ||
+      this.game.hasPendingUpgradeChoice() ||
+      this.upgradeUI.isDragging()
+    ) {
+      return;
+    }
 
     const target = event.target as Element;
     const loopHandleLineId = target.closest<SVGElement>("[data-loop-handle]")?.dataset.loopHandle;
@@ -1486,9 +1586,15 @@ export class MapRenderer {
       const dt = Math.min(0.05, (now - this.lastFrameTime) / 1000);
       this.lastFrameTime = now;
 
-      this.game.advanceTime(dt);
-      const worldUpdate = this.simulation.update(dt);
+      const pausedForUpgrade = this.game.hasPendingUpgradeChoice();
+      if (!pausedForUpgrade) {
+        this.game.advanceTime(dt);
+      }
+
       let trainUpdate = { passengersChanged: false, routeApplied: false };
+      const worldUpdate = pausedForUpgrade
+        ? { stationsChanged: false, passengersChanged: false }
+        : this.simulation.update(dt);
 
       if (worldUpdate.stationsChanged) {
         const latest = this.game.getStations().at(-1);
@@ -1528,7 +1634,7 @@ export class MapRenderer {
       const hasActiveRoutes = this.game.getLines().some(
         (line) => line.activeStationIds.length >= 2,
       );
-      if (hasActiveRoutes) {
+      if (hasActiveRoutes && !pausedForUpgrade) {
         trainUpdate = this.trainSimulation.update(dt, this.game, {
           applyPendingRoutes: !this.isInteracting(),
         });
@@ -1545,6 +1651,8 @@ export class MapRenderer {
         }
       }
 
+      this.syncUpgradeUI();
+
       this.animationFrame = requestAnimationFrame(tick);
     };
 
@@ -1559,5 +1667,6 @@ export class MapRenderer {
     this.svg.removeEventListener("pointerup", this.onPointerUp);
     this.svg.removeEventListener("pointercancel", this.onPointerUp);
     this.mapEl.removeEventListener("wheel", this.onWheel);
+    this.upgradeUI.destroy();
   }
 }

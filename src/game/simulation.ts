@@ -4,6 +4,8 @@ import {
   INITIAL_STATION_COUNT,
   MAX_STATIONS,
   MIN_STATION_SPAWN_INTERVAL,
+  MIN_PASSENGER_SPAWN_INTERVAL,
+  PASSENGER_RAMP_DELIVERIES,
 } from "../data/network.ts";
 import type { GameState } from "./GameState.ts";
 
@@ -23,6 +25,10 @@ export class Simulation {
   }
 
   update(dt: number): SimulationUpdate {
+    if (this.game.hasPendingUpgradeChoice()) {
+      return { stationsChanged: false, passengersChanged: false };
+    }
+
     let stationsChanged = false;
     let passengersChanged = false;
 
@@ -80,6 +86,11 @@ export class Simulation {
   private nextPassengerSpawnInterval(stationId: string): number {
     const queueSize = this.game.getPassengersAtStation(stationId).length;
     const pressure = Math.min(queueSize * 0.35, 1.4);
-    return BASE_PASSENGER_SPAWN_INTERVAL + Math.random() * 2 - pressure;
+    const delivered = this.game.getDeliveredCount();
+    const ramp = Math.min(1, delivered / PASSENGER_RAMP_DELIVERIES);
+    const baseInterval =
+      BASE_PASSENGER_SPAWN_INTERVAL -
+      (BASE_PASSENGER_SPAWN_INTERVAL - MIN_PASSENGER_SPAWN_INTERVAL) * ramp;
+    return baseInterval + Math.random() * 2 - pressure;
   }
 }

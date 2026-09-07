@@ -13,6 +13,11 @@ const SLOT_OFFSETS = [
   { x: 14, y: -5.5 },
   { x: -13, y: 5.5 },
   { x: -4, y: 5.5 },
+  { x: 5, y: 5.5 },
+  { x: 14, y: 5.5 },
+  { x: -9, y: 0 },
+  { x: 0, y: 0 },
+  { x: 9, y: 0 },
 ];
 
 export function createTrainElement(state: TrainRenderState): SVGGElement {
@@ -38,6 +43,7 @@ export function createTrainElement(state: TrainRenderState): SVGGElement {
 
   state.train.passengers.forEach((passenger, index) => {
     if (index >= SLOT_OFFSETS.length) return;
+    if (index >= state.train.capacity) return;
     const offset = SLOT_OFFSETS[index];
     const icon = createStationShape(
       passenger.destinationShape as StationShape,
