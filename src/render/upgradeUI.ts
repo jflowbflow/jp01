@@ -24,27 +24,16 @@ export class UpgradeUI {
   constructor(appEl: HTMLElement, callbacks: UpgradeUICallbacks) {
     this.callbacks = callbacks;
 
-    this.hudEl = document.createElement("div");
-    this.hudEl.id = "game-hud";
-    this.hudEl.className = "game-hud";
-
-    this.deliveryEl = document.createElement("div");
-    this.deliveryEl.className = "delivery-counter";
-    this.deliveryEl.textContent = "0 delivered";
-
-    this.inventoryEl = document.createElement("div");
-    this.inventoryEl.id = "upgrade-inventory";
-    this.inventoryEl.className = "upgrade-inventory";
-    this.inventoryEl.setAttribute("aria-label", "Upgrade inventory");
-
-    this.hudEl.append(this.deliveryEl, this.inventoryEl);
-    appEl.append(this.hudEl);
-
-    this.modalEl = document.createElement("div");
-    this.modalEl.id = "upgrade-modal";
-    this.modalEl.className = "upgrade-modal";
-    this.modalEl.hidden = true;
-    appEl.append(this.modalEl);
+    this.hudEl = appEl.querySelector<HTMLElement>("#game-hud") ?? appEl;
+    this.deliveryEl =
+      appEl.querySelector<HTMLElement>("#delivery-counter") ??
+      this.createFallbackDeliveryEl(this.hudEl);
+    this.inventoryEl =
+      appEl.querySelector<HTMLElement>("#upgrade-inventory") ??
+      this.createFallbackInventoryEl(this.hudEl);
+    this.modalEl =
+      appEl.querySelector<HTMLElement>("#upgrade-modal") ??
+      this.createFallbackModalEl(appEl);
 
     document.addEventListener("pointermove", this.onDocumentPointerMove);
     document.addEventListener("pointerup", this.onDocumentPointerUp);
@@ -152,9 +141,32 @@ export class UpgradeUI {
   destroy(): void {
     document.removeEventListener("pointermove", this.onDocumentPointerMove);
     document.removeEventListener("pointerup", this.onDocumentPointerUp);
-    this.hudEl.remove();
-    this.modalEl.remove();
     this.clearDragGhost();
+  }
+
+  private createFallbackDeliveryEl(parent: HTMLElement): HTMLElement {
+    const el = document.createElement("div");
+    el.id = "delivery-counter";
+    el.className = "delivery-counter";
+    parent.prepend(el);
+    return el;
+  }
+
+  private createFallbackInventoryEl(parent: HTMLElement): HTMLElement {
+    const el = document.createElement("div");
+    el.id = "upgrade-inventory";
+    el.className = "upgrade-inventory";
+    parent.append(el);
+    return el;
+  }
+
+  private createFallbackModalEl(parent: HTMLElement): HTMLElement {
+    const el = document.createElement("div");
+    el.id = "upgrade-modal";
+    el.className = "upgrade-modal";
+    el.hidden = true;
+    parent.append(el);
+    return el;
   }
 
   private startDrag(upgrade: UpgradeType, clientX: number, clientY: number): void {

@@ -8,9 +8,16 @@
   </head>
   <body>
     <div id="app">
+      <header id="game-hud" class="game-hud" aria-label="Game status">
+        <div id="delivery-counter" class="delivery-counter">0 delivered · 5 to upgrade</div>
+        <div id="upgrade-inventory" class="upgrade-inventory" aria-label="Upgrade inventory">
+          <span class="upgrade-inventory__hint">Upgrades appear here</span>
+        </div>
+      </header>
       <main id="map" class="map" aria-label="Metro map"></main>
       <div id="remove-picker" class="line-picker remove-picker" hidden aria-label="Choose line to remove"></div>
       <div id="line-picker" class="line-picker" aria-label="Choose active line"></div>
+      <div id="upgrade-modal" class="upgrade-modal" hidden aria-label="Choose upgrade"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
