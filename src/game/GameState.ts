@@ -3,13 +3,16 @@ import {
   MAX_STATIONS,
 } from "../data/network.ts";
 import {
+  canUnlockTier,
   createStation,
   emptyShapeCounts,
   findPlacement,
+  getTierUnlockBatch,
   getUnlockedShapes,
   minStationDistance,
   pickStationName,
   pickStationShape,
+  SHAPE_ORDER,
   stationRadius,
 } from "./stationSpawner.ts";
 import {
@@ -18,9 +21,8 @@ import {
   remapTrainToPendingRoute,
 } from "./pendingRoute.ts";
 import { planPassengerRoute, type TransitNetwork } from "./passengerRouting.ts";
-import { shuffleUpgradeChoices } from "./upgradeSystem.ts";
+import { shuffleUpgradeChoices, deliveriesUntilNextUpgrade, shouldTriggerUpgrade } from "./upgradeSystem.ts";
 import type { Passenger, PlayerLine, Station, StationShape, Train, UpgradeType } from "../model/types.ts";
-import { PASSENGERS_PER_UPGRADE } from "../model/types.ts";
 
 export type DragMode = "extend" | "insert" | "new" | "unloop";
 export type ExtendEnd = "head" | "tail";
@@ -58,6 +60,8 @@ export class GameState {
   private deliveredCount = 0;
   private upgradeInventory: UpgradeType[] = [];
   private pendingUpgradeChoices: UpgradeType[] | null = null;
+  private unlockedTierIndex = 1;
+  private isBatchSpawning = false;
 
   constructor() {
     this.lines = lineDefinitions.map((definition) => ({
@@ -138,8 +142,7 @@ export class GameState {
   }
 
   getPassengersUntilUpgrade(): number {
-    const remainder = this.deliveredCount % PASSENGERS_PER_UPGRADE;
-    return PASSENGERS_PER_UPGRADE - remainder;
+    return deliveriesUntilNextUpgrade(this.deliveredCount);
   }
 
   getUpgradeInventory(): readonly UpgradeType[] {
@@ -156,7 +159,7 @@ export class GameState {
 
   recordDelivery(): void {
     this.deliveredCount += 1;
-    if (this.deliveredCount % PASSENGERS_PER_UPGRADE === 0) {
+    if (shouldTriggerUpgrade(this.deliveredCount)) {
       this.pendingUpgradeChoices = shuffleUpgradeChoices();
     }
   }
@@ -176,7 +179,11 @@ export class GameState {
   }
 
   getUnlockedShapes(): StationShape[] {
-    return getUnlockedShapes(this.shapeCounts);
+    return getUnlockedShapes(this.unlockedTierIndex);
+  }
+
+  getUnlockedTierIndex(): number {
+    return this.unlockedTierIndex;
   }
 
   getActiveLineId(): string {
@@ -625,7 +632,7 @@ export class GameState {
     const point = findPlacement(this.stations, minDistance);
     if (!point) return false;
 
-    const shape = pickStationShape(this.shapeCounts, forceShape);
+    const shape = pickStationShape(this.unlockedTierIndex, forceShape);
     const name = pickStationName(this.usedNames);
     const station = createStation(`s${this.nextStationId}`, point, shape, name);
 
@@ -633,7 +640,31 @@ export class GameState {
     this.usedNames.add(name);
     this.shapeCounts[shape] += 1;
     this.stations.push(station);
+
+    if (!this.isBatchSpawning) {
+      this.checkTierUnlocks();
+    }
+
     return true;
+  }
+
+  private checkTierUnlocks(): void {
+    while (this.unlockedTierIndex < SHAPE_ORDER.length - 1) {
+      const nextTier = this.unlockedTierIndex + 1;
+      if (!canUnlockTier(nextTier, this.shapeCounts)) break;
+
+      this.unlockedTierIndex = nextTier;
+      this.spawnTierBatch(nextTier);
+    }
+  }
+
+  private spawnTierBatch(tierIndex: number): void {
+    this.isBatchSpawning = true;
+    for (const shape of getTierUnlockBatch(tierIndex)) {
+      if (!this.spawnStation(shape)) break;
+    }
+    this.isBatchSpawning = false;
+    this.checkTierUnlocks();
   }
 
   spawnPassengerAt(stationId: string): boolean {

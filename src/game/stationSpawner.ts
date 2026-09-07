@@ -52,6 +52,7 @@ const STATION_NAMES = [
 const BASE_STATION_RADIUS = 32;
 const MIN_STATION_RADIUS = 8;
 const REFERENCE_STATION_RADIUS = 16;
+const TIER_UNLOCK_COUNT = 4;
 
 export function stationRadius(totalStations: number): number {
   const t = Math.min(1, Math.max(0, (totalStations - INITIAL_STATION_COUNT) / 22));
@@ -135,25 +136,42 @@ export function findPlacement(existing: Station[], minDistance: number): Point |
   return null;
 }
 
-export function getUnlockedShapes(shapeCounts: Record<StationShape, number>): StationShape[] {
-  const unlocked: StationShape[] = [SHAPE_ORDER[0]];
+export function getUnlockedShapes(unlockedTierIndex: number): StationShape[] {
+  const capped = Math.min(unlockedTierIndex, SHAPE_ORDER.length - 1);
+  return SHAPE_ORDER.slice(0, capped + 1);
+}
 
-  for (let i = 0; i < SHAPE_ORDER.length - 1; i += 1) {
-    if (shapeCounts[SHAPE_ORDER[i]] >= 1) {
-      unlocked.push(SHAPE_ORDER[i + 1]);
-    }
+export function canUnlockTier(
+  tierIndex: number,
+  shapeCounts: Record<StationShape, number>,
+): boolean {
+  if (tierIndex <= 1) return true;
+  if (tierIndex === 2) {
+    return shapeCounts.circle >= TIER_UNLOCK_COUNT && shapeCounts.triangle >= TIER_UNLOCK_COUNT;
   }
 
-  return unlocked;
+  const previousShape = SHAPE_ORDER[tierIndex - 1];
+  return shapeCounts[previousShape] >= TIER_UNLOCK_COUNT;
+}
+
+export function getTierUnlockBatch(tierIndex: number): StationShape[] {
+  const shapes: StationShape[] = [];
+
+  for (let index = 0; index < tierIndex; index += 1) {
+    shapes.push(SHAPE_ORDER[index], SHAPE_ORDER[index]);
+  }
+
+  shapes.push("circle");
+  return shapes;
 }
 
 export function pickStationShape(
-  shapeCounts: Record<StationShape, number>,
+  unlockedTierIndex: number,
   forceShape?: StationShape,
 ): StationShape {
   if (forceShape) return forceShape;
 
-  const unlocked = getUnlockedShapes(shapeCounts);
+  const unlocked = getUnlockedShapes(unlockedTierIndex);
   const weights = unlocked.map((shape) => {
     if (shape === "circle") return 5;
     if (shape === "triangle") return 4;

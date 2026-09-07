@@ -51,15 +51,20 @@ export type RoutedLine = {
 
 export type UpgradeType = "thruster" | "carriage" | "train";
 
+export type TrainCar = {
+  id: string;
+  passengers: Passenger[];
+  capacity: number;
+};
+
 export type Train = {
   id: string;
   lineId: string;
+  cars: TrainCar[];
   distance: number;
   direction: 1 | -1;
   displayAngle: number;
   speed: number;
-  capacity: number;
-  passengers: Passenger[];
   stopStationId: string | null;
   transferCooldown: number;
   lastStationId: string | null;
@@ -67,6 +72,5 @@ export type Train = {
 
 export const BASE_TRAIN_CAPACITY = 6;
 export const BASE_TRAIN_SPEED = 48;
-export const CARRIAGE_CAPACITY_BONUS = 2;
 export const THRUSTER_SPEED_BONUS = 12;
-export const PASSENGERS_PER_UPGRADE = 5;
+export const CAR_SPACING = 50;

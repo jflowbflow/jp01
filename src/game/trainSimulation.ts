@@ -6,11 +6,11 @@ import {
   routeOctilinearOpen,
   stationStopsOnPath,
 } from "../geometry/octilinearRouter.ts";
-import type { Point, Station, Train, UpgradeType } from "../model/types.ts";
+import type { Point, Station, Train, TrainCar, UpgradeType } from "../model/types.ts";
 import {
   BASE_TRAIN_CAPACITY,
   BASE_TRAIN_SPEED,
-  CARRIAGE_CAPACITY_BONUS,
+  CAR_SPACING,
   THRUSTER_SPEED_BONUS,
 } from "../model/types.ts";
 import { getTrainAtStationOnLine, isTrainBlockingPendingRoute, remapTrainToPendingRoute } from "./pendingRoute.ts";
@@ -47,10 +47,9 @@ function trainPathAngle(
 function snapTrainAngle(
   train: Train,
   pathD: string,
-  direction: 1 | -1,
   isLoop: boolean,
 ): void {
-  train.displayAngle = trainPathAngle(pathD, train.distance, direction, isLoop);
+  train.displayAngle = trainPathAngle(pathD, train.distance, train.direction, isLoop);
 }
 
 function updateTrainAngle(
@@ -66,8 +65,19 @@ function updateTrainAngle(
   );
 }
 
+function carDistance(train: Train, carIndex: number): number {
+  return train.distance - carIndex * CAR_SPACING * train.direction;
+}
+
+function reverseConsist(train: Train): void {
+  train.cars.reverse();
+}
+
 export type TrainRenderState = {
   train: Train;
+  car: TrainCar;
+  carIndex: number;
+  isCarriage: boolean;
   x: number;
   y: number;
   angle: number;
@@ -142,11 +152,13 @@ export class TrainSimulation {
     let nearestGap = Infinity;
 
     for (const train of lineTrains) {
-      const point = pointAtPathLength(pathD, train.distance, route.isLoop);
-      const gap = Math.hypot(point.x - dropPoint.x, point.y - dropPoint.y);
-      if (gap < nearestGap) {
-        nearestGap = gap;
-        nearestTrain = train;
+      for (let carIndex = 0; carIndex < train.cars.length; carIndex += 1) {
+        const point = pointAtPathLength(pathD, carDistance(train, carIndex), route.isLoop);
+        const gap = Math.hypot(point.x - dropPoint.x, point.y - dropPoint.y);
+        if (gap < nearestGap) {
+          nearestGap = gap;
+          nearestTrain = train;
+        }
       }
     }
 
@@ -156,7 +168,7 @@ export class TrainSimulation {
     }
 
     if (upgrade === "carriage") {
-      nearestTrain.capacity += CARRIAGE_CAPACITY_BONUS;
+      nearestTrain.cars.push(this.createCar());
       return true;
     }
 
@@ -168,7 +180,7 @@ export class TrainSimulation {
         direction: lineTrains.length % 2 === 0 ? 1 : -1,
       });
       this.trains.set(newTrain.id, newTrain);
-      snapTrainAngle(newTrain, pathD, newTrain.direction, route.isLoop);
+      snapTrainAngle(newTrain, pathD, route.isLoop);
       return true;
     }
 
@@ -266,7 +278,7 @@ export class TrainSimulation {
         ? routeOctilinear(updatedStations)
         : routeOctilinearOpen(updatedStations);
       if (updatedPathD) {
-        snapTrainAngle(train, updatedPathD, train.direction, updatedRoute.isLoop);
+        snapTrainAngle(train, updatedPathD, updatedRoute.isLoop);
       }
       return { passengersChanged: false, routeApplied: true };
     }
@@ -275,7 +287,7 @@ export class TrainSimulation {
       train.transferCooldown = Math.max(0, train.transferCooldown - dt);
       if (train.transferCooldown <= 0) {
         if (
-          this.processOnePassengerTransfer(
+          this.processConsistTransfer(
             train,
             train.stopStationId,
             game,
@@ -288,7 +300,7 @@ export class TrainSimulation {
 
         train.stopStationId = null;
         if (isLoop) {
-          snapTrainAngle(train, pathD, train.direction, true);
+          snapTrainAngle(train, pathD, true);
         }
       }
       return { passengersChanged: false, routeApplied: false };
@@ -317,7 +329,7 @@ export class TrainSimulation {
           ? routeOctilinear(updatedStations)
           : routeOctilinearOpen(updatedStations);
         if (updatedPathD) {
-          snapTrainAngle(train, updatedPathD, train.direction, updatedRoute.isLoop);
+          snapTrainAngle(train, updatedPathD, updatedRoute.isLoop);
         }
         train.stopStationId = crossed.stationId;
         train.transferCooldown = PASSENGER_TRANSFER_DELAY;
@@ -326,7 +338,7 @@ export class TrainSimulation {
       }
 
       if (isLoop) {
-        snapTrainAngle(train, pathD, train.direction, true);
+        snapTrainAngle(train, pathD, true);
       }
       train.stopStationId = crossed.stationId;
       train.transferCooldown = PASSENGER_TRANSFER_DELAY;
@@ -341,11 +353,13 @@ export class TrainSimulation {
       train.distance = totalLength;
       if (train.direction > 0) {
         train.direction = -1;
+        reverseConsist(train);
       }
     } else if (nextDistance <= 0) {
       train.distance = 0;
       if (train.direction < 0) {
         train.direction = 1;
+        reverseConsist(train);
       }
     } else {
       train.distance = nextDistance;
@@ -376,18 +390,34 @@ export class TrainSimulation {
 
       if (!pathD) continue;
 
-      const point = pointAtPathLength(pathD, train.distance, route.isLoop);
-      states.push({
-        train,
-        x: point.x,
-        y: point.y,
-        angle: train.displayAngle,
-        color: line.color,
-        scale,
+      train.cars.forEach((car, carIndex) => {
+        const distance = carDistance(train, carIndex);
+        const point = pointAtPathLength(pathD, distance, route.isLoop);
+        states.push({
+          train,
+          car,
+          carIndex,
+          isCarriage: carIndex > 0,
+          x: point.x,
+          y: point.y,
+          angle: pathAngleAtLength(pathD, distance, train.direction, route.isLoop),
+          color: line.color,
+          scale,
+        });
       });
     }
 
     return states;
+  }
+
+  private createCar(): TrainCar {
+    const id = `car-${this.nextTrainIndex}`;
+    this.nextTrainIndex += 1;
+    return {
+      id,
+      passengers: [],
+      capacity: BASE_TRAIN_CAPACITY,
+    };
   }
 
   private createTrain(
@@ -399,12 +429,11 @@ export class TrainSimulation {
     return {
       id,
       lineId,
+      cars: [this.createCar()],
       distance: options.distance ?? 0,
       direction: options.direction ?? 1,
       displayAngle: 0,
       speed: BASE_TRAIN_SPEED,
-      capacity: BASE_TRAIN_CAPACITY,
-      passengers: [],
       stopStationId: null,
       transferCooldown: 0,
       lastStationId: null,
@@ -483,7 +512,7 @@ export class TrainSimulation {
     return ((from - to) % total + total) % total;
   }
 
-  private processOnePassengerTransfer(
+  private processConsistTransfer(
     train: Train,
     stationId: string,
     game: GameState,
@@ -492,21 +521,28 @@ export class TrainSimulation {
     const station = stationMap.get(stationId);
     if (!station) return false;
 
-    if (this.alightOnePassenger(train, stationId, station, game)) return true;
-    return this.boardOnePassenger(train, stationId, game);
+    for (const car of train.cars) {
+      if (this.alightOnePassenger(car, stationId, station, game)) return true;
+    }
+
+    for (const car of train.cars) {
+      if (this.boardOnePassenger(car, train.lineId, stationId, game)) return true;
+    }
+
+    return false;
   }
 
   private alightOnePassenger(
-    train: Train,
+    car: TrainCar,
     stationId: string,
     station: Station,
     game: GameState,
   ): boolean {
-    for (let index = 0; index < train.passengers.length; index += 1) {
-      const passenger = train.passengers[index];
+    for (let index = 0; index < car.passengers.length; index += 1) {
+      const passenger = car.passengers[index];
       if (!shouldPassengerAlight(passenger, stationId, station.shape)) continue;
 
-      train.passengers.splice(index, 1);
+      car.passengers.splice(index, 1);
       if (station.shape === passenger.destinationShape) {
         game.recordDelivery();
       } else {
@@ -520,7 +556,8 @@ export class TrainSimulation {
   }
 
   private boardOnePassenger(
-    train: Train,
+    car: TrainCar,
+    lineId: string,
     stationId: string,
     game: GameState,
   ): boolean {
@@ -528,10 +565,10 @@ export class TrainSimulation {
     const waiting = game.getPassengersAtStation(stationId);
 
     for (const passenger of waiting) {
-      if (train.passengers.length >= train.capacity) return false;
-      if (!shouldPassengerBoard(passenger, train.lineId, stationId, network)) continue;
+      if (car.passengers.length >= car.capacity) return false;
+      if (!shouldPassengerBoard(passenger, lineId, stationId, network)) continue;
       if (game.boardPassenger(passenger.id)) {
-        train.passengers.push(passenger);
+        car.passengers.push(passenger);
         return true;
       }
     }

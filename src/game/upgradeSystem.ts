@@ -10,9 +10,35 @@ export const UPGRADE_LABELS: Record<UpgradeType, string> = {
 
 export const UPGRADE_DESCRIPTIONS: Record<UpgradeType, string> = {
   thruster: "Boost a train's speed",
-  carriage: "Add passenger capacity to a train",
+  carriage: "Attach a passenger car to the back of a train",
   train: "Add another train to a line",
 };
+
+export function deliveriesUntilNextUpgrade(deliveredCount: number): number {
+  let cumulative = 0;
+  let interval = 5;
+
+  while (cumulative + interval <= deliveredCount) {
+    cumulative += interval;
+    interval *= 2;
+  }
+
+  return cumulative + interval - deliveredCount;
+}
+
+export function shouldTriggerUpgrade(deliveredCount: number): boolean {
+  if (deliveredCount <= 0) return false;
+
+  let cumulative = 0;
+  let interval = 5;
+
+  while (cumulative + interval < deliveredCount) {
+    cumulative += interval;
+    interval *= 2;
+  }
+
+  return deliveredCount === cumulative + interval;
+}
 
 export function shuffleUpgradeChoices(): UpgradeType[] {
   const choices = [...ALL_UPGRADES];
