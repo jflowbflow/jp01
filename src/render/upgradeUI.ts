@@ -9,7 +9,12 @@ export type UpgradeUICallbacks = {
     clientX: number,
     clientY: number,
   ) => void;
-  onUpgradeDragMove?: (clientX: number, clientY: number) => void;
+  onUpgradeDragMove?: (
+    clientX: number,
+    clientY: number,
+    dragStartX: number,
+    dragStartY: number,
+  ) => void;
 };
 
 const UPGRADE_ICONS: Record<UpgradeType, string> = {
@@ -26,6 +31,8 @@ export class UpgradeUI {
   private readonly callbacks: UpgradeUICallbacks;
   private draggingUpgrade: UpgradeType | null = null;
   private draggingInventoryIndex = -1;
+  private dragStartClientX = 0;
+  private dragStartClientY = 0;
   private dragGhost: HTMLElement | null = null;
 
   constructor(appEl: HTMLElement, callbacks: UpgradeUICallbacks) {
@@ -63,7 +70,8 @@ export class UpgradeUI {
 
     const subtitle = document.createElement("p");
     subtitle.className = "upgrade-subtitle";
-    subtitle.textContent = "Pick one — then drag it onto a line to apply";
+    subtitle.textContent =
+      "Pick one — drag onto a line. For trains, pull along the track to set direction.";
     panel.append(subtitle);
 
     const options = document.createElement("div");
@@ -145,6 +153,10 @@ export class UpgradeUI {
     return this.draggingUpgrade !== null;
   }
 
+  getDraggingUpgrade(): UpgradeType | null {
+    return this.draggingUpgrade;
+  }
+
   getDragClientPosition(): { x: number; y: number } | null {
     if (!this.dragGhost) return null;
     const left = Number.parseFloat(this.dragGhost.style.left);
@@ -192,6 +204,8 @@ export class UpgradeUI {
   ): void {
     this.draggingUpgrade = upgrade;
     this.draggingInventoryIndex = inventoryIndex;
+    this.dragStartClientX = clientX;
+    this.dragStartClientY = clientY;
     this.clearDragGhost();
 
     this.dragGhost = document.createElement("div");
@@ -204,7 +218,12 @@ export class UpgradeUI {
   private onDocumentPointerMove = (event: PointerEvent): void => {
     if (!this.draggingUpgrade || !this.dragGhost) return;
     this.positionGhost(event.clientX, event.clientY);
-    this.callbacks.onUpgradeDragMove?.(event.clientX, event.clientY);
+    this.callbacks.onUpgradeDragMove?.(
+      event.clientX,
+      event.clientY,
+      this.dragStartClientX,
+      this.dragStartClientY,
+    );
   };
 
   private onDocumentPointerUp = (event: PointerEvent): void => {

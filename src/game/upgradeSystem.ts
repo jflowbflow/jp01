@@ -12,7 +12,7 @@ export const UPGRADE_LABELS: Record<UpgradeType, string> = {
 export const UPGRADE_DESCRIPTIONS: Record<UpgradeType, string> = {
   thruster: "Boost a train's speed",
   carriage: "Attach a passenger car to the back of a train",
-  train: "Add another train to a line",
+  train: "Add a train on the line — drag along the track to set direction",
 };
 
 export function deliveriesUntilNextUpgrade(deliveredCount: number): number {

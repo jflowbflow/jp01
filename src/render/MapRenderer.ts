@@ -10,6 +10,8 @@ import { Simulation } from "../game/simulation.ts";
 import { TrainSimulation } from "../game/trainSimulation.ts";
 import { mapScale, stationRadius } from "../game/stationSpawner.ts";
 import {
+  closestPointOnPath,
+  pathAngleAtLength,
   pathTotalLength,
   pointAtPathLength,
   routeOctilinear,
@@ -82,6 +84,23 @@ type PendingPointer = {
   segmentIndex?: number;
 };
 
+type UpgradeTrainPlacement = {
+  lineId: string;
+  pathDistance: number;
+  direction: 1 | -1;
+  point: Point;
+  angle: number;
+  color: string;
+};
+
+type LineHitAtClient = {
+  lineId: string;
+  routed: RoutedLine;
+  pathDistance: number;
+  point: Point;
+  gap: number;
+};
+
 export class MapRenderer {
   private readonly mapEl: HTMLElement;
   private readonly linePickerEl: HTMLElement;
@@ -111,6 +130,7 @@ export class MapRenderer {
   private stationShapeElements = new Map<string, SVGElement>();
   private routeTransitions = new Map<string, RouteTransition>();
   private upgradeHighlightLineId: string | null = null;
+  private upgradeTrainPlacement: UpgradeTrainPlacement | null = null;
 
   constructor(
     appEl: HTMLElement,
@@ -123,11 +143,8 @@ export class MapRenderer {
       onUpgradeSelected: (upgrade) => this.handleUpgradeSelected(upgrade),
       onUpgradeDropped: (upgrade, inventoryIndex, clientX, clientY) =>
         this.handleUpgradeDropped(upgrade, inventoryIndex, clientX, clientY),
-      onUpgradeDragMove: (clientX, clientY) => {
-        const lineId = this.findLineAtClientPoint(clientX, clientY);
-        if (lineId === this.upgradeHighlightLineId) return;
-        this.upgradeHighlightLineId = lineId;
-        this.drawRoutes();
+      onUpgradeDragMove: (clientX, clientY, dragStartX, dragStartY) => {
+        this.updateUpgradeDragFeedback(clientX, clientY, dragStartX, dragStartY);
       },
     });
     this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -292,23 +309,29 @@ export class MapRenderer {
     clientX: number,
     clientY: number,
   ): void {
-    this.upgradeHighlightLineId = null;
-    this.drawRoutes();
+    const placement = this.upgradeTrainPlacement;
+    this.clearUpgradeDragFeedback();
 
-    const lineId = this.findLineAtClientPoint(clientX, clientY);
-    if (!lineId) return;
+    const hit = this.findLineHitAtClient(clientX, clientY);
+    if (!hit) return;
 
     const inventory = this.game.getUpgradeInventory();
     const inventoryUpgrade = inventory[inventoryIndex];
     if (inventoryUpgrade !== upgrade) return;
 
-    const dropPoint = this.clientToWorld(clientX, clientY);
+    const dropPoint = hit.point;
+    const trainOptions =
+      upgrade === "train" && placement && placement.lineId === hit.lineId
+        ? { pathDistance: placement.pathDistance, direction: placement.direction }
+        : {};
+
     if (
-      this.trainSimulation.applyUpgradeToNearestTrain(
-        lineId,
+      this.trainSimulation.applyLineUpgrade(
+        hit.lineId,
         upgrade,
         dropPoint,
         this.game,
+        trainOptions,
       )
     ) {
       this.game.consumeUpgradeAt(inventoryIndex);
@@ -317,33 +340,184 @@ export class MapRenderer {
     }
   }
 
-  private findLineAtClientPoint(clientX: number, clientY: number): string | null {
+  private updateUpgradeDragFeedback(
+    clientX: number,
+    clientY: number,
+    dragStartX: number,
+    dragStartY: number,
+  ): void {
+    const dragging = this.upgradeUI.getDraggingUpgrade();
+    const hit = this.findLineHitAtClient(clientX, clientY);
+    const nextHighlight = hit?.lineId ?? null;
+
+    if (dragging === "train" && hit) {
+      const direction = this.resolveTrainDirection(
+        hit,
+        clientX,
+        clientY,
+        dragStartX,
+        dragStartY,
+        this.upgradeTrainPlacement?.direction ?? 1,
+      );
+      const angle = pathAngleAtLength(
+        hit.routed.pathD,
+        hit.pathDistance,
+        direction,
+        hit.routed.line.activeIsLoop,
+      );
+      this.upgradeTrainPlacement = {
+        lineId: hit.lineId,
+        pathDistance: hit.pathDistance,
+        direction,
+        point: hit.point,
+        angle,
+        color: hit.routed.line.color,
+      };
+    } else {
+      this.upgradeTrainPlacement = null;
+    }
+
+    const highlightChanged = nextHighlight !== this.upgradeHighlightLineId;
+    this.upgradeHighlightLineId = nextHighlight;
+
+    if (highlightChanged) {
+      this.drawRoutes();
+    }
+    this.drawUpgradeDragPreview();
+  }
+
+  private clearUpgradeDragFeedback(): void {
+    this.upgradeHighlightLineId = null;
+    this.upgradeTrainPlacement = null;
+    this.drawRoutes();
+    this.drawUpgradeDragPreview();
+  }
+
+  private resolveTrainDirection(
+    hit: LineHitAtClient,
+    clientX: number,
+    clientY: number,
+    dragStartX: number,
+    dragStartY: number,
+    fallback: 1 | -1,
+  ): 1 | -1 {
+    const pointer = this.clientToWorld(clientX, clientY);
+    const dragStart = this.clientToWorld(dragStartX, dragStartY);
+    const anchor = hit.point;
+
+    const pullX = pointer.x - anchor.x;
+    const pullY = pointer.y - anchor.y;
+    const strokeX = dragStart.x - anchor.x;
+    const strokeY = dragStart.y - anchor.y;
+
+    let vecX = pullX;
+    let vecY = pullY;
+    if (Math.hypot(vecX, vecY) < 10) {
+      vecX = strokeX;
+      vecY = strokeY;
+    }
+    if (Math.hypot(vecX, vecY) < 6) return fallback;
+
+    const forwardAngle = pathAngleAtLength(
+      hit.routed.pathD,
+      hit.pathDistance,
+      1,
+      hit.routed.line.activeIsLoop,
+    );
+    const forwardX = Math.cos(forwardAngle);
+    const forwardY = Math.sin(forwardAngle);
+    const dot = vecX * forwardX + vecY * forwardY;
+    return dot >= 0 ? 1 : -1;
+  }
+
+  private drawUpgradeDragPreview(): void {
+    const placement = this.upgradeTrainPlacement;
+    if (!placement) {
+      const existing = this.previewGroup.querySelector(".upgrade-train-preview");
+      existing?.remove();
+      return;
+    }
+
+    this.previewGroup.replaceChildren();
+    const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    group.setAttribute("class", "upgrade-train-preview");
+    group.setAttribute("pointer-events", "none");
+
+    const scale = this.getMapScale();
+    const angleDeg = (placement.angle * 180) / Math.PI;
+    group.setAttribute(
+      "transform",
+      `translate(${placement.point.x} ${placement.point.y}) rotate(${angleDeg}) scale(${scale})`,
+    );
+
+    const bodyLength = 45;
+    const bodyWidth = 22;
+    const body = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    body.setAttribute("x", String(-bodyLength / 2));
+    body.setAttribute("y", String(-bodyWidth / 2));
+    body.setAttribute("width", String(bodyLength));
+    body.setAttribute("height", String(bodyWidth));
+    body.setAttribute("rx", "5");
+    body.setAttribute("fill", "rgba(255, 255, 255, 0.92)");
+    body.setAttribute("stroke", placement.color);
+    body.setAttribute("stroke-width", "5");
+    group.append(body);
+
+    const nose = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    nose.setAttribute(
+      "points",
+      `${bodyLength / 2 - 2},${-bodyWidth / 2 + 3} ${bodyLength / 2 + 6},0 ${bodyLength / 2 - 2},${bodyWidth / 2 - 3}`,
+    );
+    nose.setAttribute("fill", placement.color);
+    group.append(nose);
+
+    const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    const arrowOffset = bodyLength / 2 + 14;
+    arrow.setAttribute(
+      "d",
+      `M ${-8} ${-arrowOffset} L 0 ${-arrowOffset - 12} L 8 ${-arrowOffset} M 0 ${-arrowOffset - 12} L 0 ${-arrowOffset - 22}`,
+    );
+    arrow.setAttribute("fill", "none");
+    arrow.setAttribute("stroke", placement.color);
+    arrow.setAttribute("stroke-width", "4");
+    arrow.setAttribute("stroke-linecap", "round");
+    arrow.setAttribute("stroke-linejoin", "round");
+    arrow.setAttribute("opacity", "0.9");
+    group.append(arrow);
+
+    this.previewGroup.append(group);
+  }
+
+  private findLineHitAtClient(clientX: number, clientY: number): LineHitAtClient | null {
     const point = this.clientToWorld(clientX, clientY);
     const hitThreshold = this.getRouteHitWidth();
-    let bestLineId: string | null = null;
-    let bestGap = Infinity;
+    let best: LineHitAtClient | null = null;
 
     for (const routed of this.activeRoutedLines) {
-      const total = routed.totalLength;
-      if (total === 0) continue;
+      if (routed.totalLength === 0) continue;
 
-      const samples = Math.max(48, Math.ceil(total / 6));
-      for (let index = 0; index <= samples; index += 1) {
-        const distance = (total * index) / samples;
-        const sample = pointAtPathLength(
-          routed.pathD,
-          distance,
-          routed.line.activeIsLoop,
-        );
-        const gap = Math.hypot(sample.x - point.x, sample.y - point.y);
-        if (gap < bestGap) {
-          bestGap = gap;
-          bestLineId = routed.line.id;
-        }
+      const wrap = routed.line.activeIsLoop;
+      const proximity = closestPointOnPath(routed.pathD, point, wrap);
+      const gap = Math.hypot(proximity.point.x - point.x, proximity.point.y - point.y);
+      if (gap > hitThreshold) continue;
+
+      let pathDistance = proximity.distance;
+      if (!wrap) {
+        pathDistance = Math.max(0, Math.min(pathDistance, routed.totalLength));
+      }
+
+      if (!best || gap < best.gap) {
+        best = {
+          lineId: routed.line.id,
+          routed,
+          pathDistance,
+          point: pointAtPathLength(routed.pathD, pathDistance, wrap),
+          gap,
+        };
       }
     }
 
-    return bestGap <= hitThreshold ? bestLineId : null;
+    return best;
   }
 
   private finalizeLineRoute(lineId: string): void {
