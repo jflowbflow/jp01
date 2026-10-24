@@ -3,7 +3,13 @@ import { UPGRADE_DESCRIPTIONS, UPGRADE_LABELS } from "../game/upgradeSystem.ts";
 
 export type UpgradeUICallbacks = {
   onUpgradeSelected: (upgrade: UpgradeType) => void;
-  onUpgradeDropped: (upgrade: UpgradeType, clientX: number, clientY: number) => void;
+  onUpgradeDropped: (
+    upgrade: UpgradeType,
+    inventoryIndex: number,
+    clientX: number,
+    clientY: number,
+  ) => void;
+  onUpgradeDragMove?: (clientX: number, clientY: number) => void;
 };
 
 const UPGRADE_ICONS: Record<UpgradeType, string> = {
@@ -19,6 +25,7 @@ export class UpgradeUI {
   private readonly deliveryEl: HTMLElement;
   private readonly callbacks: UpgradeUICallbacks;
   private draggingUpgrade: UpgradeType | null = null;
+  private draggingInventoryIndex = -1;
   private dragGhost: HTMLElement | null = null;
 
   constructor(appEl: HTMLElement, callbacks: UpgradeUICallbacks) {
@@ -122,7 +129,7 @@ export class UpgradeUI {
         if (event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
-        this.startDrag(upgrade, event.clientX, event.clientY);
+        this.startDrag(upgrade, index, event.clientX, event.clientY);
         item.setPointerCapture(event.pointerId);
       });
 
@@ -136,6 +143,14 @@ export class UpgradeUI {
 
   isDragging(): boolean {
     return this.draggingUpgrade !== null;
+  }
+
+  getDragClientPosition(): { x: number; y: number } | null {
+    if (!this.dragGhost) return null;
+    const left = Number.parseFloat(this.dragGhost.style.left);
+    const top = Number.parseFloat(this.dragGhost.style.top);
+    if (Number.isNaN(left) || Number.isNaN(top)) return null;
+    return { x: left, y: top };
   }
 
   destroy(): void {
@@ -169,8 +184,14 @@ export class UpgradeUI {
     return el;
   }
 
-  private startDrag(upgrade: UpgradeType, clientX: number, clientY: number): void {
+  private startDrag(
+    upgrade: UpgradeType,
+    inventoryIndex: number,
+    clientX: number,
+    clientY: number,
+  ): void {
     this.draggingUpgrade = upgrade;
+    this.draggingInventoryIndex = inventoryIndex;
     this.clearDragGhost();
 
     this.dragGhost = document.createElement("div");
@@ -183,16 +204,24 @@ export class UpgradeUI {
   private onDocumentPointerMove = (event: PointerEvent): void => {
     if (!this.draggingUpgrade || !this.dragGhost) return;
     this.positionGhost(event.clientX, event.clientY);
+    this.callbacks.onUpgradeDragMove?.(event.clientX, event.clientY);
   };
 
   private onDocumentPointerUp = (event: PointerEvent): void => {
     if (!this.draggingUpgrade) return;
 
     const upgrade = this.draggingUpgrade;
+    const inventoryIndex = this.draggingInventoryIndex;
     this.draggingUpgrade = null;
+    this.draggingInventoryIndex = -1;
     this.clearDragGhost();
 
-    this.callbacks.onUpgradeDropped(upgrade, event.clientX, event.clientY);
+    this.callbacks.onUpgradeDropped(
+      upgrade,
+      inventoryIndex,
+      event.clientX,
+      event.clientY,
+    );
   };
 
   private positionGhost(clientX: number, clientY: number): void {

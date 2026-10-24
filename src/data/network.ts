@@ -17,3 +17,5 @@ export const MIN_STATION_SPAWN_INTERVAL = 14;
 export const BASE_PASSENGER_SPAWN_INTERVAL = 8;
 export const MIN_PASSENGER_SPAWN_INTERVAL = 3.5;
 export const PASSENGER_RAMP_DELIVERIES = 40;
+/** Passengers delivered between each choose-one-of-three upgrade reward. */
+export const DELIVERIES_PER_UPGRADE = 5;

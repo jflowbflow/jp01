@@ -178,6 +178,14 @@ export class GameState {
     return true;
   }
 
+  consumeUpgradeAt(inventoryIndex: number): UpgradeType | null {
+    if (inventoryIndex < 0 || inventoryIndex >= this.upgradeInventory.length) {
+      return null;
+    }
+    const [upgrade] = this.upgradeInventory.splice(inventoryIndex, 1);
+    return upgrade ?? null;
+  }
+
   getUnlockedShapes(): StationShape[] {
     return getUnlockedShapes(this.unlockedTierIndex);
   }

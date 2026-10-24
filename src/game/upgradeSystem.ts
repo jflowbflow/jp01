@@ -1,3 +1,4 @@
+import { DELIVERIES_PER_UPGRADE } from "../data/network.ts";
 import type { UpgradeType } from "../model/types.ts";
 
 const ALL_UPGRADES: UpgradeType[] = ["thruster", "carriage", "train"];
@@ -15,29 +16,13 @@ export const UPGRADE_DESCRIPTIONS: Record<UpgradeType, string> = {
 };
 
 export function deliveriesUntilNextUpgrade(deliveredCount: number): number {
-  let cumulative = 0;
-  let interval = 5;
-
-  while (cumulative + interval <= deliveredCount) {
-    cumulative += interval;
-    interval *= 2;
-  }
-
-  return cumulative + interval - deliveredCount;
+  if (deliveredCount <= 0) return DELIVERIES_PER_UPGRADE;
+  const remainder = deliveredCount % DELIVERIES_PER_UPGRADE;
+  return remainder === 0 ? DELIVERIES_PER_UPGRADE : DELIVERIES_PER_UPGRADE - remainder;
 }
 
 export function shouldTriggerUpgrade(deliveredCount: number): boolean {
-  if (deliveredCount <= 0) return false;
-
-  let cumulative = 0;
-  let interval = 5;
-
-  while (cumulative + interval < deliveredCount) {
-    cumulative += interval;
-    interval *= 2;
-  }
-
-  return deliveredCount === cumulative + interval;
+  return deliveredCount > 0 && deliveredCount % DELIVERIES_PER_UPGRADE === 0;
 }
 
 export function shuffleUpgradeChoices(): UpgradeType[] {

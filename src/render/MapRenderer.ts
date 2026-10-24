@@ -110,6 +110,7 @@ export class MapRenderer {
   private pendingStationRedraw = false;
   private stationShapeElements = new Map<string, SVGElement>();
   private routeTransitions = new Map<string, RouteTransition>();
+  private upgradeHighlightLineId: string | null = null;
 
   constructor(
     appEl: HTMLElement,
@@ -120,8 +121,14 @@ export class MapRenderer {
     this.linePickerEl = linePickerEl;
     this.upgradeUI = new UpgradeUI(appEl, {
       onUpgradeSelected: (upgrade) => this.handleUpgradeSelected(upgrade),
-      onUpgradeDropped: (upgrade, clientX, clientY) =>
-        this.handleUpgradeDropped(upgrade, clientX, clientY),
+      onUpgradeDropped: (upgrade, inventoryIndex, clientX, clientY) =>
+        this.handleUpgradeDropped(upgrade, inventoryIndex, clientX, clientY),
+      onUpgradeDragMove: (clientX, clientY) => {
+        const lineId = this.findLineAtClientPoint(clientX, clientY);
+        if (lineId === this.upgradeHighlightLineId) return;
+        this.upgradeHighlightLineId = lineId;
+        this.drawRoutes();
+      },
     });
     this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.svg.setAttribute("viewBox", "0 0 900 560");
@@ -281,14 +288,19 @@ export class MapRenderer {
 
   private handleUpgradeDropped(
     upgrade: UpgradeType,
+    inventoryIndex: number,
     clientX: number,
     clientY: number,
   ): void {
+    this.upgradeHighlightLineId = null;
+    this.drawRoutes();
+
     const lineId = this.findLineAtClientPoint(clientX, clientY);
     if (!lineId) return;
 
     const inventory = this.game.getUpgradeInventory();
-    if (!inventory.includes(upgrade)) return;
+    const inventoryUpgrade = inventory[inventoryIndex];
+    if (inventoryUpgrade !== upgrade) return;
 
     const dropPoint = this.clientToWorld(clientX, clientY);
     if (
@@ -299,7 +311,7 @@ export class MapRenderer {
         this.game,
       )
     ) {
-      this.game.consumeUpgrade(upgrade);
+      this.game.consumeUpgradeAt(inventoryIndex);
       this.syncUpgradeUI();
       this.drawTrains();
     }
@@ -796,6 +808,16 @@ export class MapRenderer {
           new Set([draggedKey]),
         );
         continue;
+      }
+
+      if (this.upgradeHighlightLineId === line.id) {
+        this.appendRouteTrack(
+          this.routesGroup,
+          routed.pathD,
+          "#fffdf8",
+          "0.35",
+          this.getLineWidth() * 2.2,
+        );
       }
 
       this.appendRouteTrack(this.routesGroup, routed.pathD, routed.line.color, "0.95");
