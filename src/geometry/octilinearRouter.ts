@@ -173,10 +173,25 @@ export function closestPointOnPath(
 
   let bestDistance = 0;
   let bestGap = Infinity;
-  const samples = Math.max(64, Math.ceil(total / 4));
+  const samples = Math.max(96, Math.ceil(total / 2));
 
   for (let index = 0; index <= samples; index += 1) {
     const distance = (total * index) / samples;
+    const point = pointAtPathLength(pathD, distance, wrap);
+    const gap = Math.hypot(point.x - target.x, point.y - target.y);
+    if (gap < bestGap) {
+      bestGap = gap;
+      bestDistance = distance;
+    }
+  }
+
+  const refineWindow = Math.max(16, total / samples);
+  const refineSteps = 48;
+  for (let step = -refineSteps; step <= refineSteps; step += 1) {
+    const offset = (refineWindow * step) / refineSteps;
+    const distance = wrap
+      ? ((bestDistance + offset) % total + total) % total
+      : Math.max(0, Math.min(bestDistance + offset, total));
     const point = pointAtPathLength(pathD, distance, wrap);
     const gap = Math.hypot(point.x - target.x, point.y - target.y);
     if (gap < bestGap) {

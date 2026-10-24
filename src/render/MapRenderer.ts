@@ -91,6 +91,8 @@ type UpgradeTrainPlacement = {
   point: Point;
   angle: number;
   color: string;
+  pathD: string;
+  isLoop: boolean;
 };
 
 type LineHitAtClient = {
@@ -117,6 +119,7 @@ export class MapRenderer {
   private readonly stationsGroup: SVGGElement;
   private readonly passengersGroup: SVGGElement;
   private readonly trainsGroup: SVGGElement;
+  private readonly upgradePreviewGroup: SVGGElement;
   private activeRoutedLines: RoutedLine[] = [];
   private animationFrame = 0;
   private lastFrameTime = performance.now();
@@ -131,6 +134,7 @@ export class MapRenderer {
   private routeTransitions = new Map<string, RouteTransition>();
   private upgradeHighlightLineId: string | null = null;
   private upgradeTrainPlacement: UpgradeTrainPlacement | null = null;
+  private upgradeDragLastClient: { x: number; y: number } | null = null;
 
   constructor(
     appEl: HTMLElement,
@@ -146,6 +150,14 @@ export class MapRenderer {
       onUpgradeDragMove: (clientX, clientY, dragStartX, dragStartY) => {
         this.updateUpgradeDragFeedback(clientX, clientY, dragStartX, dragStartY);
       },
+      onUpgradeDragStart: (upgrade) => {
+        this.upgradeDragLastClient = null;
+        this.upgradeTrainPlacement = null;
+        if (upgrade !== "train") {
+          this.upgradeUI.setSnappedToLine(false);
+        }
+        this.clearUpgradePreviewGraphics();
+      },
     });
     this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.svg.setAttribute("viewBox", "0 0 900 560");
@@ -160,6 +172,7 @@ export class MapRenderer {
     this.stationsGroup = this.createGroup("stations");
     this.passengersGroup = this.createGroup("passengers");
     this.trainsGroup = this.createGroup("trains");
+    this.upgradePreviewGroup = this.createGroup("upgrade-preview");
 
     this.svg.append(
       this.routesGroup,
@@ -169,6 +182,7 @@ export class MapRenderer {
       this.stationsGroup,
       this.passengersGroup,
       this.trainsGroup,
+      this.upgradePreviewGroup,
     );
     this.mapEl.replaceChildren(this.svg);
     this.viewport.apply(this.svg);
@@ -312,7 +326,7 @@ export class MapRenderer {
     const placement = this.upgradeTrainPlacement;
     this.clearUpgradeDragFeedback();
 
-    const hit = this.findLineHitAtClient(clientX, clientY);
+    const hit = this.findLineHitAtClient(clientX, clientY, upgrade);
     if (!hit) return;
 
     const inventory = this.game.getUpgradeInventory();
@@ -320,10 +334,14 @@ export class MapRenderer {
     if (inventoryUpgrade !== upgrade) return;
 
     const dropPoint = hit.point;
-    const trainOptions =
-      upgrade === "train" && placement && placement.lineId === hit.lineId
-        ? { pathDistance: placement.pathDistance, direction: placement.direction }
-        : {};
+    let trainOptions: { pathDistance?: number; direction?: 1 | -1 } = {};
+    if (upgrade === "train") {
+      const direction =
+        placement && placement.lineId === hit.lineId
+          ? placement.direction
+          : this.resolveTrainDirection(hit, clientX, clientY, clientX, clientY, 1);
+      trainOptions = { pathDistance: hit.pathDistance, direction };
+    }
 
     if (
       this.trainSimulation.applyLineUpgrade(
@@ -347,10 +365,12 @@ export class MapRenderer {
     dragStartY: number,
   ): void {
     const dragging = this.upgradeUI.getDraggingUpgrade();
-    const hit = this.findLineHitAtClient(clientX, clientY);
+    const hit = this.findLineHitAtClient(clientX, clientY, dragging);
     const nextHighlight = hit?.lineId ?? null;
+    const snappedTrain = dragging === "train" && hit !== null;
+    this.upgradeUI.setSnappedToLine(snappedTrain);
 
-    if (dragging === "train" && hit) {
+    if (snappedTrain && hit) {
       const direction = this.resolveTrainDirection(
         hit,
         clientX,
@@ -372,10 +392,14 @@ export class MapRenderer {
         point: hit.point,
         angle,
         color: hit.routed.line.color,
+        pathD: hit.routed.pathD,
+        isLoop: hit.routed.line.activeIsLoop,
       };
     } else {
       this.upgradeTrainPlacement = null;
     }
+
+    this.upgradeDragLastClient = { x: clientX, y: clientY };
 
     const highlightChanged = nextHighlight !== this.upgradeHighlightLineId;
     this.upgradeHighlightLineId = nextHighlight;
@@ -389,8 +413,14 @@ export class MapRenderer {
   private clearUpgradeDragFeedback(): void {
     this.upgradeHighlightLineId = null;
     this.upgradeTrainPlacement = null;
+    this.upgradeDragLastClient = null;
+    this.upgradeUI.setSnappedToLine(false);
     this.drawRoutes();
-    this.drawUpgradeDragPreview();
+    this.clearUpgradePreviewGraphics();
+  }
+
+  private clearUpgradePreviewGraphics(): void {
+    this.upgradePreviewGroup.replaceChildren();
   }
 
   private resolveTrainDirection(
@@ -405,18 +435,29 @@ export class MapRenderer {
     const dragStart = this.clientToWorld(dragStartX, dragStartY);
     const anchor = hit.point;
 
-    const pullX = pointer.x - anchor.x;
-    const pullY = pointer.y - anchor.y;
+    let vecX = pointer.x - anchor.x;
+    let vecY = pointer.y - anchor.y;
+
+    if (this.upgradeDragLastClient) {
+      const last = this.clientToWorld(
+        this.upgradeDragLastClient.x,
+        this.upgradeDragLastClient.y,
+      );
+      const moveX = pointer.x - last.x;
+      const moveY = pointer.y - last.y;
+      if (Math.hypot(moveX, moveY) > 2) {
+        vecX = moveX;
+        vecY = moveY;
+      }
+    }
+
     const strokeX = dragStart.x - anchor.x;
     const strokeY = dragStart.y - anchor.y;
-
-    let vecX = pullX;
-    let vecY = pullY;
     if (Math.hypot(vecX, vecY) < 10) {
       vecX = strokeX;
       vecY = strokeY;
     }
-    if (Math.hypot(vecX, vecY) < 6) return fallback;
+    if (Math.hypot(vecX, vecY) < 4) return fallback;
 
     const forwardAngle = pathAngleAtLength(
       hit.routed.pathD,
@@ -432,65 +473,91 @@ export class MapRenderer {
 
   private drawUpgradeDragPreview(): void {
     const placement = this.upgradeTrainPlacement;
-    if (!placement) {
-      const existing = this.previewGroup.querySelector(".upgrade-train-preview");
-      existing?.remove();
-      return;
-    }
-
-    this.previewGroup.replaceChildren();
-    const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    group.setAttribute("class", "upgrade-train-preview");
-    group.setAttribute("pointer-events", "none");
+    this.clearUpgradePreviewGraphics();
+    if (!placement) return;
 
     const scale = this.getMapScale();
-    const angleDeg = (placement.angle * 180) / Math.PI;
-    group.setAttribute(
-      "transform",
-      `translate(${placement.point.x} ${placement.point.y}) rotate(${angleDeg}) scale(${scale})`,
+    const wrapper = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    wrapper.setAttribute("class", "upgrade-train-preview");
+    wrapper.setAttribute("pointer-events", "none");
+
+    this.appendTrainDirectionMarkers(
+      wrapper,
+      placement.pathD,
+      placement.pathDistance,
+      placement.direction,
+      placement.isLoop,
+      placement.color,
+      scale,
     );
 
-    const bodyLength = 45;
-    const bodyWidth = 22;
-    const body = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    body.setAttribute("x", String(-bodyLength / 2));
-    body.setAttribute("y", String(-bodyWidth / 2));
-    body.setAttribute("width", String(bodyLength));
-    body.setAttribute("height", String(bodyWidth));
-    body.setAttribute("rx", "5");
-    body.setAttribute("fill", "rgba(255, 255, 255, 0.92)");
-    body.setAttribute("stroke", placement.color);
-    body.setAttribute("stroke-width", "5");
-    group.append(body);
+    const previewTrain = createTrainElement({
+      train: {
+        id: "upgrade-preview",
+        lineId: placement.lineId,
+        cars: [],
+        distance: placement.pathDistance,
+        direction: placement.direction,
+        displayAngle: placement.angle,
+        speed: 0,
+        stopStationId: null,
+        transferCooldown: 0,
+        lastStationId: null,
+      },
+      car: { id: "upgrade-preview-car", passengers: [], capacity: 4 },
+      carIndex: 0,
+      isCarriage: false,
+      x: placement.point.x,
+      y: placement.point.y,
+      angle: placement.angle,
+      color: placement.color,
+      scale,
+    });
+    previewTrain.setAttribute("opacity", "0.98");
+    wrapper.append(previewTrain);
 
-    const nose = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-    nose.setAttribute(
-      "points",
-      `${bodyLength / 2 - 2},${-bodyWidth / 2 + 3} ${bodyLength / 2 + 6},0 ${bodyLength / 2 - 2},${bodyWidth / 2 - 3}`,
-    );
-    nose.setAttribute("fill", placement.color);
-    group.append(nose);
-
-    const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    const arrowOffset = bodyLength / 2 + 14;
-    arrow.setAttribute(
-      "d",
-      `M ${-8} ${-arrowOffset} L 0 ${-arrowOffset - 12} L 8 ${-arrowOffset} M 0 ${-arrowOffset - 12} L 0 ${-arrowOffset - 22}`,
-    );
-    arrow.setAttribute("fill", "none");
-    arrow.setAttribute("stroke", placement.color);
-    arrow.setAttribute("stroke-width", "4");
-    arrow.setAttribute("stroke-linecap", "round");
-    arrow.setAttribute("stroke-linejoin", "round");
-    arrow.setAttribute("opacity", "0.9");
-    group.append(arrow);
-
-    this.previewGroup.append(group);
+    this.upgradePreviewGroup.append(wrapper);
   }
 
-  private findLineHitAtClient(clientX: number, clientY: number): LineHitAtClient | null {
+  private appendTrainDirectionMarkers(
+    parent: SVGGElement,
+    pathD: string,
+    pathDistance: number,
+    direction: 1 | -1,
+    isLoop: boolean,
+    color: string,
+    scale: number,
+  ): void {
+    const markerOffsets = [22, 40, 58];
+    for (const offset of markerOffsets) {
+      const distance = pathDistance + offset * direction;
+      const point = pointAtPathLength(pathD, distance, isLoop);
+      const angle = pathAngleAtLength(pathD, distance, direction, isLoop);
+      const angleDeg = (angle * 180) / Math.PI;
+      const marker = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      marker.setAttribute(
+        "transform",
+        `translate(${point.x} ${point.y}) rotate(${angleDeg}) scale(${scale})`,
+      );
+      marker.setAttribute("d", "M -6 0 L 0 -7 L 6 0");
+      marker.setAttribute("fill", "none");
+      marker.setAttribute("stroke", color);
+      marker.setAttribute("stroke-width", "4");
+      marker.setAttribute("stroke-linecap", "round");
+      marker.setAttribute("stroke-linejoin", "round");
+      marker.setAttribute("opacity", "0.75");
+      parent.append(marker);
+    }
+  }
+
+  private findLineHitAtClient(
+    clientX: number,
+    clientY: number,
+    draggingUpgrade: UpgradeType | null = null,
+  ): LineHitAtClient | null {
     const point = this.clientToWorld(clientX, clientY);
-    const hitThreshold = this.getRouteHitWidth();
+    const hitThreshold =
+      this.getRouteHitWidth() * (draggingUpgrade === "train" ? 2.1 : 1);
     let best: LineHitAtClient | null = null;
 
     for (const routed of this.activeRoutedLines) {

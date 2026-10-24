@@ -15,6 +15,7 @@ export type UpgradeUICallbacks = {
     dragStartX: number,
     dragStartY: number,
   ) => void;
+  onUpgradeDragStart?: (upgrade: UpgradeType) => void;
 };
 
 const UPGRADE_ICONS: Record<UpgradeType, string> = {
@@ -210,9 +211,25 @@ export class UpgradeUI {
 
     this.dragGhost = document.createElement("div");
     this.dragGhost.className = `upgrade-drag-ghost upgrade-drag-ghost--${upgrade}`;
-    this.dragGhost.textContent = UPGRADE_ICONS[upgrade];
+    if (upgrade === "train") {
+      this.dragGhost.textContent = "";
+      this.dragGhost.setAttribute("aria-hidden", "true");
+      const body = document.createElement("span");
+      body.className = "upgrade-drag-ghost__train-body";
+      const nose = document.createElement("span");
+      nose.className = "upgrade-drag-ghost__train-nose";
+      this.dragGhost.append(body, nose);
+    } else {
+      this.dragGhost.textContent = UPGRADE_ICONS[upgrade];
+    }
     document.body.append(this.dragGhost);
     this.positionGhost(clientX, clientY);
+    this.callbacks.onUpgradeDragStart?.(upgrade);
+  }
+
+  setSnappedToLine(snapped: boolean): void {
+    if (!this.dragGhost) return;
+    this.dragGhost.classList.toggle("upgrade-drag-ghost--snapped", snapped);
   }
 
   private onDocumentPointerMove = (event: PointerEvent): void => {
