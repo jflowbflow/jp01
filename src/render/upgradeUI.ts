@@ -3,7 +3,19 @@ import { UPGRADE_DESCRIPTIONS, UPGRADE_LABELS } from "../game/upgradeSystem.ts";
 
 export type UpgradeUICallbacks = {
   onUpgradeSelected: (upgrade: UpgradeType) => void;
-  onUpgradeDropped: (upgrade: UpgradeType, clientX: number, clientY: number) => void;
+  onUpgradeDropped: (
+    upgrade: UpgradeType,
+    inventoryIndex: number,
+    clientX: number,
+    clientY: number,
+  ) => void;
+  onUpgradeDragMove?: (
+    clientX: number,
+    clientY: number,
+    dragStartX: number,
+    dragStartY: number,
+  ) => void;
+  onUpgradeDragStart?: (upgrade: UpgradeType) => void;
 };
 
 const UPGRADE_ICONS: Record<UpgradeType, string> = {
@@ -19,6 +31,9 @@ export class UpgradeUI {
   private readonly deliveryEl: HTMLElement;
   private readonly callbacks: UpgradeUICallbacks;
   private draggingUpgrade: UpgradeType | null = null;
+  private draggingInventoryIndex = -1;
+  private dragStartClientX = 0;
+  private dragStartClientY = 0;
   private dragGhost: HTMLElement | null = null;
 
   constructor(appEl: HTMLElement, callbacks: UpgradeUICallbacks) {
@@ -56,7 +71,8 @@ export class UpgradeUI {
 
     const subtitle = document.createElement("p");
     subtitle.className = "upgrade-subtitle";
-    subtitle.textContent = "Pick one — then drag it onto a line to apply";
+    subtitle.textContent =
+      "Pick one — drag onto a line. For trains, pull along the track to set direction.";
     panel.append(subtitle);
 
     const options = document.createElement("div");
@@ -122,7 +138,7 @@ export class UpgradeUI {
         if (event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
-        this.startDrag(upgrade, event.clientX, event.clientY);
+        this.startDrag(upgrade, index, event.clientX, event.clientY);
         item.setPointerCapture(event.pointerId);
       });
 
@@ -136,6 +152,18 @@ export class UpgradeUI {
 
   isDragging(): boolean {
     return this.draggingUpgrade !== null;
+  }
+
+  getDraggingUpgrade(): UpgradeType | null {
+    return this.draggingUpgrade;
+  }
+
+  getDragClientPosition(): { x: number; y: number } | null {
+    if (!this.dragGhost) return null;
+    const left = Number.parseFloat(this.dragGhost.style.left);
+    const top = Number.parseFloat(this.dragGhost.style.top);
+    if (Number.isNaN(left) || Number.isNaN(top)) return null;
+    return { x: left, y: top };
   }
 
   destroy(): void {
@@ -169,30 +197,67 @@ export class UpgradeUI {
     return el;
   }
 
-  private startDrag(upgrade: UpgradeType, clientX: number, clientY: number): void {
+  private startDrag(
+    upgrade: UpgradeType,
+    inventoryIndex: number,
+    clientX: number,
+    clientY: number,
+  ): void {
     this.draggingUpgrade = upgrade;
+    this.draggingInventoryIndex = inventoryIndex;
+    this.dragStartClientX = clientX;
+    this.dragStartClientY = clientY;
     this.clearDragGhost();
 
     this.dragGhost = document.createElement("div");
     this.dragGhost.className = `upgrade-drag-ghost upgrade-drag-ghost--${upgrade}`;
-    this.dragGhost.textContent = UPGRADE_ICONS[upgrade];
+    if (upgrade === "train") {
+      this.dragGhost.textContent = "";
+      this.dragGhost.setAttribute("aria-hidden", "true");
+      const body = document.createElement("span");
+      body.className = "upgrade-drag-ghost__train-body";
+      const nose = document.createElement("span");
+      nose.className = "upgrade-drag-ghost__train-nose";
+      this.dragGhost.append(body, nose);
+    } else {
+      this.dragGhost.textContent = UPGRADE_ICONS[upgrade];
+    }
     document.body.append(this.dragGhost);
     this.positionGhost(clientX, clientY);
+    this.callbacks.onUpgradeDragStart?.(upgrade);
+  }
+
+  setSnappedToLine(snapped: boolean): void {
+    if (!this.dragGhost) return;
+    this.dragGhost.classList.toggle("upgrade-drag-ghost--snapped", snapped);
   }
 
   private onDocumentPointerMove = (event: PointerEvent): void => {
     if (!this.draggingUpgrade || !this.dragGhost) return;
     this.positionGhost(event.clientX, event.clientY);
+    this.callbacks.onUpgradeDragMove?.(
+      event.clientX,
+      event.clientY,
+      this.dragStartClientX,
+      this.dragStartClientY,
+    );
   };
 
   private onDocumentPointerUp = (event: PointerEvent): void => {
     if (!this.draggingUpgrade) return;
 
     const upgrade = this.draggingUpgrade;
+    const inventoryIndex = this.draggingInventoryIndex;
     this.draggingUpgrade = null;
+    this.draggingInventoryIndex = -1;
     this.clearDragGhost();
 
-    this.callbacks.onUpgradeDropped(upgrade, event.clientX, event.clientY);
+    this.callbacks.onUpgradeDropped(
+      upgrade,
+      inventoryIndex,
+      event.clientX,
+      event.clientY,
+    );
   };
 
   private positionGhost(clientX: number, clientY: number): void {

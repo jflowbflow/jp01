@@ -158,6 +158,54 @@ export function pathAngleAtLength(
   return Math.atan2(p2.y - p1.y, p2.x - p1.x);
 }
 
+export type PathProximity = {
+  distance: number;
+  point: Point;
+};
+
+export function closestPointOnPath(
+  pathD: string,
+  target: Point,
+  wrap = true,
+): PathProximity {
+  const total = pathTotalLength(pathD);
+  if (total === 0) return { distance: 0, point: { x: 0, y: 0 } };
+
+  let bestDistance = 0;
+  let bestGap = Infinity;
+  const samples = Math.max(96, Math.ceil(total / 2));
+
+  for (let index = 0; index <= samples; index += 1) {
+    const distance = (total * index) / samples;
+    const point = pointAtPathLength(pathD, distance, wrap);
+    const gap = Math.hypot(point.x - target.x, point.y - target.y);
+    if (gap < bestGap) {
+      bestGap = gap;
+      bestDistance = distance;
+    }
+  }
+
+  const refineWindow = Math.max(16, total / samples);
+  const refineSteps = 48;
+  for (let step = -refineSteps; step <= refineSteps; step += 1) {
+    const offset = (refineWindow * step) / refineSteps;
+    const distance = wrap
+      ? ((bestDistance + offset) % total + total) % total
+      : Math.max(0, Math.min(bestDistance + offset, total));
+    const point = pointAtPathLength(pathD, distance, wrap);
+    const gap = Math.hypot(point.x - target.x, point.y - target.y);
+    if (gap < bestGap) {
+      bestGap = gap;
+      bestDistance = distance;
+    }
+  }
+
+  return {
+    distance: bestDistance,
+    point: pointAtPathLength(pathD, bestDistance, wrap),
+  };
+}
+
 export type StationPathStop = {
   stationId: string;
   distance: number;

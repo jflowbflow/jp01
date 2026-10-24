@@ -1,5 +1,6 @@
 import {
   pathAngleAtLength,
+  closestPointOnPath,
   pathTotalLength,
   pointAtPathLength,
   routeOctilinear,
@@ -125,17 +126,15 @@ export class TrainSimulation {
     }
   }
 
-  applyUpgradeToNearestTrain(
+  applyLineUpgrade(
     lineId: string,
     upgrade: UpgradeType,
     dropPoint: Point,
     game: GameState,
+    options: { pathDistance?: number; direction?: 1 | -1 } = {},
   ): boolean {
     const line = game.getLine(lineId);
     if (!line || line.activeStationIds.length < 2) return false;
-
-    const lineTrains = this.getTrainsOnLine(lineId);
-    if (lineTrains.length === 0) return false;
 
     const stationMap = new Map(game.getStations().map((s) => [s.id, s]));
     const route = game.getActiveRoute(line);
@@ -147,6 +146,29 @@ export class TrainSimulation {
       ? routeOctilinear(stations)
       : routeOctilinearOpen(stations);
     if (!pathD) return false;
+
+    if (upgrade === "train") {
+      const totalLength = pathTotalLength(pathD);
+      const wrap = route.isLoop;
+      const proximity =
+        options.pathDistance !== undefined
+          ? {
+              distance: options.pathDistance,
+              point: pointAtPathLength(pathD, options.pathDistance, wrap),
+            }
+          : closestPointOnPath(pathD, dropPoint, wrap);
+      const distance = wrap
+        ? proximity.distance
+        : Math.max(0, Math.min(proximity.distance, totalLength));
+      const direction = options.direction ?? 1;
+      const newTrain = this.createTrain(lineId, { distance, direction });
+      this.trains.set(newTrain.id, newTrain);
+      snapTrainAngle(newTrain, pathD, route.isLoop);
+      return true;
+    }
+
+    const lineTrains = this.getTrainsOnLine(lineId);
+    if (lineTrains.length === 0) return false;
 
     let nearestTrain = lineTrains[0];
     let nearestGap = Infinity;
@@ -169,18 +191,6 @@ export class TrainSimulation {
 
     if (upgrade === "carriage") {
       nearestTrain.cars.push(this.createCar());
-      return true;
-    }
-
-    if (upgrade === "train") {
-      const totalLength = pathTotalLength(pathD);
-      const offset = totalLength / (lineTrains.length + 1);
-      const newTrain = this.createTrain(lineId, {
-        distance: offset * lineTrains.length,
-        direction: lineTrains.length % 2 === 0 ? 1 : -1,
-      });
-      this.trains.set(newTrain.id, newTrain);
-      snapTrainAngle(newTrain, pathD, route.isLoop);
       return true;
     }
 

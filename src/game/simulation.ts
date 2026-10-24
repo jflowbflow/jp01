@@ -87,7 +87,9 @@ export class Simulation {
     const queueSize = this.game.getPassengersAtStation(stationId).length;
     const pressure = Math.min(queueSize * 0.35, 1.4);
     const delivered = this.game.getDeliveredCount();
-    const ramp = Math.min(1, delivered / PASSENGER_RAMP_DELIVERIES);
+    const weekRamp = Math.min(1, (this.game.getWeek() - 1) / 12);
+    const deliveryRamp = Math.min(1, delivered / PASSENGER_RAMP_DELIVERIES);
+    const ramp = Math.min(1, deliveryRamp * 0.75 + weekRamp * 0.35);
     const baseInterval =
       BASE_PASSENGER_SPAWN_INTERVAL -
       (BASE_PASSENGER_SPAWN_INTERVAL - MIN_PASSENGER_SPAWN_INTERVAL) * ramp;
